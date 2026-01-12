@@ -23,37 +23,36 @@ define( 'SMSENLINEA_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SMSENLINEA_URL', plugin_dir_url( __FILE__ ) );
 define( 'SMSENLINEA_API_BASE', 'https://whatsapp.smsenlinea.com/api' );
 
-// 1. REGISTRO DEL HOOK DE ACTIVACIÓN (Faltaba esto)
+// 1. HOOK DE ACTIVACIÓN (Vital para crear la tabla de base de datos)
 register_activation_hook( __FILE__, [ 'SmsEnLinea\\ProConnect\\Activator', 'activate' ] );
 
-// 2. AUTOLOADER CORREGIDO (Esto solucionará el Fatal Error)
+// 2. HOOK DE DESACTIVACIÓN (Nuevo: Limpia el Cron Job al quitar el plugin)
+register_deactivation_hook( __FILE__, function() {
+    wp_clear_scheduled_hook( 'smsenlinea_recover_carts_event' );
+});
+
+// 3. AUTOLOADER ROBUSTO
 spl_autoload_register( function ( $class ) {
     $prefix = 'SmsEnLinea\\ProConnect\\';
     $base_dir = SMSENLINEA_PATH . 'includes/';
     $len = strlen( $prefix );
 
-    // Si la clase no usa nuestro namespace, retornar
     if ( strncmp( $prefix, $class, $len ) !== 0 ) {
         return;
     }
 
-    // Obtener la clase relativa sin el prefijo
     $relative_class = substr( $class, $len );
-
-    // Separar en partes (carpetas y nombre de archivo)
     $parts = explode( '\\', $relative_class );
     $class_name = array_pop( $parts );
     
     // Convertir nombre de clase a formato de archivo (class-nombre-clase.php)
     $file_name = 'class-' . str_replace( '_', '-', strtolower( $class_name ) ) . '.php';
 
-    // Construir subdirectorio si existe
     $sub_dir = '';
     if ( ! empty( $parts ) ) {
         $sub_dir = str_replace( '_', '-', strtolower( implode( '/', $parts ) ) ) . '/';
     }
 
-    // Ruta final
     $file = $base_dir . $sub_dir . $file_name;
 
     if ( file_exists( $file ) ) {
@@ -86,26 +85,25 @@ class Main {
         
         // Inicializar Webhook Listener
         Webhook_Handler::get_instance();
+        
+        // NUEVO: Inicializar el Vigilante (Scheduler)
+        // Esto es obligatorio para que el Cron Job funcione
+        Scheduler::get_instance();
 
-        // Inicializar Integraciones si los plugins existen
+        // Inicializar Integraciones
         if ( class_exists( 'WooCommerce' ) ) {
             new Integrations\Woocommerce_Integration();
         }
         
-        // Integraciones opcionales adicionales (Contact Form 7, Gravity Forms, etc.)
         if ( defined( 'WPCF7_VERSION' ) ) {
              new Integrations\Contact_Form_7();
-        }
-        
-        if ( class_exists( 'GFForms' ) ) {
-             new Integrations\Gravity_Forms();
         }
     }
 
     private function init_hooks() {
         add_action( 'plugins_loaded', [ $this, 'load_textdomain' ] );
         
-        // 3. INICIALIZAR EL ADMIN (Faltaba esto para ver el menú)
+        // Inicializar el Panel de Admin
         if ( is_admin() ) {
             new Admin\Admin_Settings();
         }
