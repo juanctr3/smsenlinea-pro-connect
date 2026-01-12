@@ -396,6 +396,35 @@ if ( $active_tab == 'reports' ) {
 
 <script>
 jQuery(document).ready(function($) {
+    // Lógica para envío manual de Rompehielos
+    $('.btn-manual-send').click(function(e) {
+        e.preventDefault();
+        var $btn = $(this);
+        var cartId = $btn.data('id');
+        
+        if( !confirm('¿Estás seguro de enviar el mensaje Rompehielos a este cliente ahora?') ) {
+            return;
+        }
+
+        $btn.prop('disabled', true).text('Enviando...');
+
+        $.post(ajaxurl, {
+            action: 'smsenlinea_manual_icebreaker',
+            id: cartId,
+            nonce: '<?php echo wp_create_nonce( "smsenlinea_admin_nonce" ); ?>' // Seguridad Envato
+        }, function(response) {
+            if (response.success) {
+                alert('✅ ' + response.data);
+                location.reload(); // Recargar para actualizar la tabla (el carrito pasará a contactado)
+            } else {
+                alert('❌ Error: ' + (response.data || 'Desconocido'));
+                $btn.prop('disabled', false).html('<span class="dashicons dashicons-paperplane" style="margin-top:4px;"></span> Reintentar');
+            }
+        }).fail(function() {
+            alert('Error de conexión con el servidor.');
+            $btn.prop('disabled', false).text('Reintentar');
+        });
+    });
     // Emojis simple
     $('.emoji-btn').click(function(e) {
         var t = $(this).data('target');
@@ -473,6 +502,7 @@ jQuery(document).ready(function($) {
     });
 });
 </script>
+
 
 
 
