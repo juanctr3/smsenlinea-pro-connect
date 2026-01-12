@@ -92,6 +92,9 @@ if ( $active_tab == 'reports' ) {
         <a href="?page=smsenlinea-pro&tab=woocommerce" class="<?php echo $active_tab == 'woocommerce' ? 'active' : ''; ?>">
             <span class="dashicons dashicons-cart"></span> Notificaciones
         </a>
+        <a href="?page=smsenlinea-pro&tab=abandoned" class="<?php echo $active_tab == 'abandoned' ? 'active' : ''; ?>">
+            <span class="dashicons dashicons-warning"></span> Carritos Abandonados
+        </a>
         <a href="?page=smsenlinea-pro&tab=reports" class="<?php echo $active_tab == 'reports' ? 'active' : ''; ?>">
             <span class="dashicons dashicons-chart-bar"></span> Reportes
         </a>
@@ -195,6 +198,65 @@ if ( $active_tab == 'reports' ) {
                         <input type="hidden" name="smsenlinea_clear_logs" value="0"> <button type="submit" name="smsenlinea_action_clear_logs" value="1" class="button button-link-delete" onclick="return confirm('¿Borrar historial?');">Limpiar Historial</button>
                     </div>
                 </div>
+            </div>
+        <?php elseif ( $active_tab == 'abandoned' ) : 
+            // Consultar solo los abandonados (sin recuperar)
+            $abandoned_carts = $wpdb->get_results( "SELECT * FROM $table_sessions WHERE status = 'abandoned' ORDER BY created_at DESC LIMIT 50" );
+        ?>
+            <div class="sms-card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <h3>🚨 Carritos por Recuperar</h3>
+                    <span class="description">Mostrando los últimos 50 abandonos pendientes.</span>
+                </div>
+
+                <?php if ( empty( $abandoned_carts ) ) : ?>
+                    <div style="padding:40px; text-align:center; color:#888; background:#f9f9f9; border-radius:4px;">
+                        <span class="dashicons dashicons-yes" style="font-size:40px; height:40px; margin-bottom:10px; color:#46b450;"></span><br>
+                        ¡Todo limpio! No hay carritos abandonados pendientes.
+                    </div>
+                <?php else : ?>
+                    <table class="logs-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Cliente</th>
+                                <th>Teléfono</th>
+                                <th>Carrito</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $abandoned_carts as $cart ) : 
+                                $cart_data = maybe_unserialize( $cart->cart_data );
+                                $item_count = is_array($cart_data) ? count($cart_data) : 0;
+                            ?>
+                            <tr>
+                                <td>
+                                    <?php echo esc_html( date_i18n( get_option( 'date_format' ) . ' H:i', strtotime( $cart->created_at ) ) ); ?>
+                                    <br><small style="color:#999;"><?php echo human_time_diff( strtotime( $cart->created_at ), current_time( 'timestamp' ) ); ?> atrás</small>
+                                </td>
+                                <td>
+                                    <strong><?php echo esc_html( $cart->customer_name ); ?></strong><br>
+                                    <small><?php echo esc_html( $cart->email ); ?></small>
+                                </td>
+                                <td>
+                                    <code><?php echo esc_html( $cart->phone ); ?></code>
+                                    <a href="https://wa.me/<?php echo preg_replace('/[^0-9]/', '', $cart->phone); ?>" target="_blank" style="text-decoration:none; margin-left:5px;">↗️</a>
+                                </td>
+                                <td>
+                                    <strong><?php echo esc_html( $cart->cart_total . ' ' . $cart->currency ); ?></strong><br>
+                                    <small><?php echo $item_count; ?> artículos</small>
+                                </td>
+                                <td>
+                                    <button type="button" class="button button-primary btn-manual-send" data-id="<?php echo esc_attr( $cart->id ); ?>">
+                                        <span class="dashicons dashicons-paperplane" style="margin-top:4px;"></span> Enviar Rompehielos
+                                    </button>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
             </div>
 
         <?php elseif ( $active_tab == 'strategy' ) : 
@@ -411,5 +473,6 @@ jQuery(document).ready(function($) {
     });
 });
 </script>
+
 
 
