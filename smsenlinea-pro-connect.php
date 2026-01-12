@@ -21,26 +21,40 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'SMSENLINEA_VERSION', '1.0.0' );
 define( 'SMSENLINEA_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SMSENLINEA_URL', plugin_dir_url( __FILE__ ) );
-define( 'SMSENLINEA_API_BASE', 'https://whatsapp.smsenlinea.com/api' ); // [cite: 92]
+define( 'SMSENLINEA_API_BASE', 'https://whatsapp.smsenlinea.com/api' );
 
-// Autoloader simple para clases
+// 1. REGISTRO DEL HOOK DE ACTIVACIÓN (Faltaba esto)
+register_activation_hook( __FILE__, [ 'SmsEnLinea\\ProConnect\\Activator', 'activate' ] );
+
+// 2. AUTOLOADER CORREGIDO (Esto solucionará el Fatal Error)
 spl_autoload_register( function ( $class ) {
     $prefix = 'SmsEnLinea\\ProConnect\\';
     $base_dir = SMSENLINEA_PATH . 'includes/';
     $len = strlen( $prefix );
 
+    // Si la clase no usa nuestro namespace, retornar
     if ( strncmp( $prefix, $class, $len ) !== 0 ) {
         return;
     }
 
+    // Obtener la clase relativa sin el prefijo
     $relative_class = substr( $class, $len );
-    // Mapeo simple de namespace a estructura de archivos
-    $file = $base_dir . 'class-' . str_replace( '_', '-', strtolower( str_replace( '\\', '/', $relative_class ) ) ) . '.php';
+
+    // Separar en partes (carpetas y nombre de archivo)
+    $parts = explode( '\\', $relative_class );
+    $class_name = array_pop( $parts );
     
-    // Ajuste para subcarpetas 'integrations' si es necesario, o mantener estructura plana en includes/
-    if ( strpos( $file, 'integrations/' ) === false && strpos( $relative_class, 'Integrations' ) !== false ) {
-         $file = $base_dir . 'integrations/class-' . str_replace( '_', '-', strtolower( basename( str_replace( '\\', '/', $relative_class ) ) ) ) . '.php';
+    // Convertir nombre de clase a formato de archivo (class-nombre-clase.php)
+    $file_name = 'class-' . str_replace( '_', '-', strtolower( $class_name ) ) . '.php';
+
+    // Construir subdirectorio si existe
+    $sub_dir = '';
+    if ( ! empty( $parts ) ) {
+        $sub_dir = str_replace( '_', '-', strtolower( implode( '/', $parts ) ) ) . '/';
     }
+
+    // Ruta final
+    $file = $base_dir . $sub_dir . $file_name;
 
     if ( file_exists( $file ) ) {
         require $file;
@@ -77,11 +91,24 @@ class Main {
         if ( class_exists( 'WooCommerce' ) ) {
             new Integrations\Woocommerce_Integration();
         }
+        
+        // Integraciones opcionales adicionales (Contact Form 7, Gravity Forms, etc.)
+        if ( defined( 'WPCF7_VERSION' ) ) {
+             new Integrations\Contact_Form_7();
+        }
+        
+        if ( class_exists( 'GFForms' ) ) {
+             new Integrations\Gravity_Forms();
+        }
     }
 
     private function init_hooks() {
         add_action( 'plugins_loaded', [ $this, 'load_textdomain' ] );
-        // Aquí se instanciaría la clase Admin_Settings en el hook 'admin_menu'
+        
+        // 3. INICIALIZAR EL ADMIN (Faltaba esto para ver el menú)
+        if ( is_admin() ) {
+            new Admin\Admin_Settings();
+        }
     }
 
     public function load_textdomain() {
