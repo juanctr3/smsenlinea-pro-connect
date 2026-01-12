@@ -101,15 +101,18 @@ if ( $active_tab == 'reports' ) {
             $webhook_url = add_query_arg( 'secret', $secret, get_rest_url( null, 'smsenlinea/v1/webhook' ) );
         ?>
             <div class="sms-card">
-                <h3>Credenciales API</h3>
-                <div class="sms-form-group">
-                    <label>API Secret</label>
-                    <input type="password" name="smsenlinea_settings[api_secret]" value="<?php echo esc_attr( $opts['api_secret'] ); ?>">
-                    <div style="margin-top:10px;">
-                        <button type="button" id="test-connection-btn" class="button button-secondary">Probar Conexión</button>
-                        <span id="connection-result" style="margin-left:10px; font-weight:bold;"></span>
-                    </div>
+            <h3>Credenciales API</h3>
+            <div class="sms-form-group">
+                <label>API Secret</label>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <input type="password" id="sms_api_secret" name="smsenlinea_settings[api_secret]" value="<?php echo esc_attr( $opts['api_secret'] ); ?>" style="flex-grow: 1;">
+                    <button type="button" id="btn_test_connection" class="button button-secondary">Probar Conexión</button>
                 </div>
+                <p class="sms-helper">Obtenido de Herramientas -> API Keys en SmsEnLinea.</p>
+
+                <div id="connection_status_card" style="margin-top: 15px; display: none;"></div>
+            </div>
+        </div>
             </div>
 
             <div class="sms-card">
@@ -283,13 +286,60 @@ jQuery(document).ready(function($) {
         if(em) { i.setRangeText(em,i.selectionStart,i.selectionEnd,'end'); i.focus(); }
     });
 
-    // Test Conexión
-    $('#test-connection-btn').click(function() {
-        var b=$(this), r=$('#connection-result');
-        b.prop('disabled',true).text('...');
-        $.post(ajaxurl,{action:'smsenlinea_test_connection'},function(d){
-            b.prop('disabled',false).text('Probar');
-            r.text(d.success?'✅ OK':'❌ Error').css('color',d.success?'green':'red');
+    // [Nuevo V2] Test Conexión Avanzado y Estado del Plan
+    $('#btn_test_connection').on('click', function(e) {
+        e.preventDefault();
+        var secret = $('#sms_api_secret').val();
+        var $btn = $(this);
+        var $card = $('#connection_status_card');
+
+        if(!secret) {
+            alert('Por favor ingresa un API Secret primero.');
+            return;
+        }
+
+        $btn.prop('disabled', true).text('Verificando...');
+        $card.hide().html('');
+
+        $.post(ajaxurl, {
+            action: 'smsenlinea_check_connection', // Debe coincidir con el hook en class-admin-settings.php
+            secret: secret
+        }, function(response) {
+            $btn.prop('disabled', false).text('Probar Conexión');
+
+            if (response.success) {
+                var plan = response.data.data;
+                // Construir HTML de la tarjeta de Plan
+                var html = '<div style="background:#f0f6fc; border-left: 4px solid #46b450; padding: 15px; border-radius: 4px;">';
+                html += '<h4 style="margin: 0 0 10px 0; color: #1d2327;">✅ Conexión Exitosa: Plan ' + plan.name + '</h4>';
+                html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; font-size: 13px;">';
+
+                // Datos de WhatsApp
+                if(plan.usage.wa_send) {
+                    html += '<div><strong>WhatsApp:</strong> ' + plan.usage.wa_send.used + ' envíos</div>';
+                }
+                // Datos de SMS
+                if(plan.usage.sms_send) {
+                    var limit = plan.usage.sms_send.limit > 0 ? '/' + plan.usage.sms_send.limit : '';
+                    html += '<div><strong>SMS:</strong> ' + plan.usage.sms_send.used + limit + '</div>';
+                }
+                // Datos de Dispositivos
+                if(plan.usage.devices) {
+                    html += '<div><strong>Dispositivos:</strong> ' + plan.usage.devices.used + '/' + plan.usage.devices.limit + '</div>';
+                }
+
+                html += '</div>';
+                html += '<div style="margin-top: 12px;"><a href="https://smsenlinea.com/panel/billing" target="_blank" class="button button-small">Gestionar Plan / Recargar</a></div>';
+                html += '</div>';
+
+                $card.html(html).fadeIn();
+            } else {
+                var msg = response.data || 'Error desconocido';
+                $card.html('<div style="background:#fbeaea; border-left: 4px solid #d63638; padding: 10px; color: #d63638;">❌ Error: ' + msg + '</div>').fadeIn();
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Probar Conexión');
+            $card.html('<div style="padding: 10px; color: red;">Error de red o servidor.</div>').fadeIn();
         });
     });
 
@@ -305,3 +355,4 @@ jQuery(document).ready(function($) {
     });
 });
 </script>
+
