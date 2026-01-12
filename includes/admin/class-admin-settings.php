@@ -2,6 +2,7 @@
 namespace SmsEnLinea\ProConnect\Admin;
 
 use SmsEnLinea\ProConnect\Api_Handler;
+use SmsEnLinea\ProConnect\Scheduler; // Importante: Importar el Scheduler
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -11,13 +12,18 @@ class Admin_Settings {
 
     private $options_slug = 'smsenlinea_settings';
     private $wc_options_slug = 'smsenlinea_wc_settings';
-    private $strategy_slug = 'smsenlinea_strategy_settings'; // Nuevo grupo
+    private $strategy_slug = 'smsenlinea_strategy_settings';
 
     public function __construct() {
         add_action( 'admin_menu', [ $this, 'add_plugin_page' ] );
         add_action( 'admin_init', [ $this, 'page_init' ] );
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
+        
+        // AJAX Hooks
         add_action( 'wp_ajax_smsenlinea_test_connection', [ $this, 'ajax_test_connection' ] );
+        
+        // NUEVO: Hook para disparo manual de recuperación
+        add_action( 'wp_ajax_smsenlinea_trigger_cron', [ $this, 'ajax_trigger_cron' ] );
     }
 
     public function add_plugin_page() {
@@ -33,6 +39,8 @@ class Admin_Settings {
     }
 
     public function create_admin_page() {
+        // Pasamos $wpdb a la vista para los reportes
+        global $wpdb;
         $view_file = SMSENLINEA_PATH . 'includes/admin/views/settings-page.php';
         if ( file_exists( $view_file ) ) {
             require_once $view_file;
@@ -44,15 +52,14 @@ class Admin_Settings {
             return;
         }
         wp_enqueue_script( 'jquery' );
-        // Aquí podríamos cargar un CSS externo, pero lo haremos inline en la vista para facilitar la instalación
     }
 
     public function ajax_test_connection() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( 'Permisos insuficientes.' );
-        }
+        if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Sin permisos' );
+
         $api = Api_Handler::get_instance();
         $result = $api->test_connection();
+
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( $result->get_error_message() );
         } else {
@@ -60,10 +67,20 @@ class Admin_Settings {
         }
     }
 
+    // NUEVO: Función para ejecutar el vigilante manualmente
+    public function ajax_trigger_cron() {
+        if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Sin permisos' );
+
+        // Llamamos al Vigilante directamente
+        $scheduler = Scheduler::get_instance();
+        $scheduler->check_abandoned_carts();
+
+        wp_send_json_success( 'Revisión de carritos ejecutada correctamente.' );
+    }
+
     public function page_init() {
         register_setting( 'smsenlinea_option_group', $this->options_slug, [ $this, 'sanitize_settings' ] );
         register_setting( 'smsenlinea_wc_group', $this->wc_options_slug, [ $this, 'sanitize_text_array' ] );
-        // Registro de la nueva sección de estrategia
         register_setting( 'smsenlinea_strategy_group', $this->strategy_slug, [ $this, 'sanitize_text_array' ] );
     }
 
@@ -79,7 +96,6 @@ class Admin_Settings {
 
     public function sanitize_text_array( $input ) {
         if ( ! is_array( $input ) ) { return []; }
-        // Permitimos HTML básico y saltos de línea para los mensajes
         return array_map( 'wp_kses_post', $input );
     }
 }
