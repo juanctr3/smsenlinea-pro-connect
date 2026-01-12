@@ -28,7 +28,7 @@ $active_tab = isset( $_GET['tab'] ) ? $_GET['tab'] : 'api_settings';
                     <th scope="row">API Secret</th>
                     <td>
                         <input type="password" name="smsenlinea_settings[api_secret]" value="<?php echo esc_attr( $options['api_secret'] ); ?>" class="regular-text" />
-                        [cite_start]<p class="description">Obtenido de Herramientas -> API Keys en SmsEnLinea[cite: 92].</p>
+                        <p class="description">Obtenido de Herramientas -> API Keys en SmsEnLinea.</p>
                     </td>
                 </tr>
                 <tr valign="top">
@@ -38,21 +38,21 @@ $active_tab = isset( $_GET['tab'] ) ? $_GET['tab'] : 'api_settings';
                             <option value="devices" <?php selected( $options['sending_mode'], 'devices' ); ?>>Dispositivos Vinculados (Android)</option>
                             <option value="credits" <?php selected( $options['sending_mode'], 'credits' ); ?>>Créditos / Gateway</option>
                         </select>
-                        [cite_start]<p class="description">Define si usarás tu propio móvil o gateways de terceros[cite: 175, 176].</p>
+                        <p class="description">Define si usarás tu propio móvil o gateways de terceros.</p>
                     </td>
                 </tr>
                 <tr valign="top">
                     <th scope="row">Device Unique ID</th>
                     <td>
                         <input type="text" name="smsenlinea_settings[device_id]" value="<?php echo esc_attr( $options['device_id'] ?? '' ); ?>" class="regular-text" />
-                        <p class="description">Requerido solo para modo 'devices'. [cite_start]Obtenlo en /get/devices[cite: 177, 178].</p>
+                        <p class="description">Requerido solo para modo 'devices'. Obtenlo en /get/devices.</p>
                     </td>
                 </tr>
                 <tr valign="top">
                     <th scope="row">WhatsApp Account Unique ID</th>
                     <td>
                         <input type="text" name="smsenlinea_settings[wa_account_unique]" value="<?php echo esc_attr( $options['wa_account_unique'] ?? '' ); ?>" class="regular-text" />
-                        <p class="description">ID único de la cuenta de WhatsApp para envíos. [cite_start]Ver /get/wa.accounts[cite: 174].</p>
+                        <p class="description">ID único de la cuenta de WhatsApp para envíos. Ver /get/wa.accounts.</p>
                     </td>
                 </tr>
             </table>
@@ -72,7 +72,7 @@ $active_tab = isset( $_GET['tab'] ) ? $_GET['tab'] : 'api_settings';
                     <th scope="row">Webhook Secret</th>
                     <td>
                         <input type="text" name="smsenlinea_settings[webhook_secret]" value="<?php echo esc_attr( $options['webhook_secret'] ); ?>" class="regular-text" />
-                        [cite_start]<p class="description">Define este mismo secreto en el panel de SmsEnLinea para validar que los datos vienen de ellos[cite: 81, 83].</p>
+                        <p class="description">Define este mismo secreto en el panel de SmsEnLinea para validar que los datos vienen de ellos.</p>
                     </td>
                 </tr>
             </table>
