@@ -2,8 +2,8 @@
 namespace SmsEnLinea\ProConnect\Admin;
 
 use SmsEnLinea\ProConnect\Api_Handler;
-use SmsEnLinea\ProConnect\Scheduler; // Importante: Importar el Scheduler
-
+use SmsEnLinea\ProConnect\Scheduler;
+use SmsEnLinea\ProConnect\Flow_Engine; // Importante: Importar el Motor
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -19,6 +19,7 @@ class Admin_Settings {
         add_action( 'admin_init', [ $this, 'page_init' ] );
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
         add_action( 'wp_ajax_smsenlinea_check_connection', [ $this, 'ajax_check_connection' ] );
+        add_action( 'wp_ajax_smsenlinea_manual_icebreaker', [ $this, 'ajax_manual_icebreaker' ] );
         
         // AJAX Hooks
         add_action( 'wp_ajax_smsenlinea_test_connection', [ $this, 'ajax_test_connection' ] );
@@ -128,5 +129,45 @@ class Admin_Settings {
             wp_send_json_success( $result );
         }
     }
+    /**
+     * AJAX: Envío manual del mensaje rompehielos a un carrito específico
+     */
+    public function ajax_manual_icebreaker() {
+        // 1. Verificar permisos y seguridad
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Permisos insuficientes' );
+        }
+        
+        // Verificar nonce (seguridad contra CSRF)
+        check_ajax_referer( 'smsenlinea_admin_nonce', 'nonce' );
+
+        $id = isset( $_POST['id'] ) ? intval( $_POST['id'] ) : 0;
+        if ( ! $id ) {
+            wp_send_json_error( 'ID de sesión inválido' );
+        }
+
+        // 2. Obtener la sesión de la base de datos
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'smsenlinea_sessions';
+        $session = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_name WHERE id = %d", $id ) );
+
+        if ( ! $session ) {
+            wp_send_json_error( 'Carrito no encontrado' );
+        }
+
+        // 3. Invocar al Motor de Flujos (Flow Engine)
+        // Usamos el mismo motor que usa el automático para asegurar consistencia
+        $engine = Flow_Engine::get_instance();
+        
+        // run_recovery_sequence devuelve true si envió, false si falló
+        $result = $engine->run_recovery_sequence( $session );
+
+        if ( $result ) {
+            wp_send_json_success( '¡Mensaje Rompehielos enviado con éxito!' );
+        } else {
+            wp_send_json_error( 'Error al enviar. Revisa los logs o la configuración de API.' );
+        }
+    }
 }
+
 
