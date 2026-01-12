@@ -1,8 +1,6 @@
 <?php
 namespace SmsEnLinea\ProConnect\Integrations;
 
-use SmsEnLinea\ProConnect\Api_Handler;
-
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -23,52 +21,57 @@ class WooCommerce_Integration {
         global $wpdb;
         $this->table_name = $wpdb->prefix . 'smsenlinea_sessions';
 
-        // 1. Inyectar "El Espía" en el Checkout
-        // CORRECCIÓN: Usamos wp_footer para imprimir el script inline de forma segura
-        add_action( 'wp_footer', [ $this, 'print_checkout_tracker_script' ] );
+        // 1. Inyectar "El Espía" en el Checkout (Usamos wp_footer con prioridad alta)
+        add_action( 'wp_footer', [ $this, 'print_checkout_tracker_script' ], 9999 );
 
-        // 2. Receptor AJAX (Guarda los datos en vivo)
+        // 2. Receptor AJAX
         add_action( 'wp_ajax_smsenlinea_capture_checkout', [ $this, 'capture_checkout_data' ] );
         add_action( 'wp_ajax_nopriv_smsenlinea_capture_checkout', [ $this, 'capture_checkout_data' ] );
 
-        // 3. Hooks de Estado de Orden (Para recuperar fallidos o cerrar exitosos)
+        // 3. Hooks de Orden
         add_action( 'woocommerce_order_status_failed', [ $this, 'handle_order_failure' ] );
         add_action( 'woocommerce_order_status_cancelled', [ $this, 'handle_order_failure' ] );
         
-        // Si la orden se completa, borramos la sesión de recuperación para no molestar
+        // 4. Limpieza tras compra exitosa
         add_action( 'woocommerce_payment_complete', [ $this, 'mark_session_recovered' ] );
         add_action( 'woocommerce_order_status_processing', [ $this, 'mark_session_recovered' ] );
         add_action( 'woocommerce_order_status_completed', [ $this, 'mark_session_recovered' ] );
     }
 
     /**
-     * 1. INYECTAR SCRIPT DE RASTREO (JS)
-     * Detecta cuando el usuario escribe en el campo teléfono.
+     * SCRIPT DE RASTREO (JS) MEJORADO
+     * Incluye logs en consola para verificar que funciona.
      */
     public function print_checkout_tracker_script() {
-        // Solo ejecutar en la página de finalizar compra y si no se ha recibido la orden
+        // Solo en checkout y si no es la página de "Gracias por su compra"
         if ( ! is_checkout() || is_order_received_page() ) {
             return;
         }
         ?>
         <script type="text/javascript">
         jQuery(document).ready(function($) {
+            console.log('SmsEnLinea: Iniciando monitor de carrito...');
             var captureTimer;
             
-            // Escuchar cuando el usuario escribe en el teléfono, email o nombre
-            // Usamos 'input' además de 'change' y 'blur' para mayor sensibilidad
-            $('form.checkout').on('input change blur', '#billing_phone, #billing_email, #billing_first_name, #billing_last_name', function() {
+            // Detectar escritura en campos clave
+            $(document.body).on('input change blur', '#billing_phone, #billing_email, #billing_first_name', function() {
                 
                 var phone = $('#billing_phone').val();
                 var email = $('#billing_email').val();
                 
-                // Solo enviamos si hay un teléfono mínimamente válido (6 dígitos) O un email con arroba
-                if ( (phone && phone.length > 6) || (email && email.includes('@')) ) {
+                // Limpiar timer anterior
+                clearTimeout(captureTimer);
+                
+                // Validación básica antes de enviar nada
+                var hasPhone = phone && phone.replace(/\D/g,'').length > 6;
+                var hasEmail = email && email.indexOf('@') > -1;
+
+                if ( hasPhone || hasEmail ) {
                     
-                    clearTimeout(captureTimer);
-                    
-                    // Esperar 1.5 segundos después de que deje de escribir para no saturar el servidor
+                    // Esperar 1.5 segundos a que termine de escribir
                     captureTimer = setTimeout(function() {
+                        console.log('SmsEnLinea: Intentando capturar datos...');
+                        
                         var data = {
                             action: 'smsenlinea_capture_checkout',
                             phone: phone,
@@ -78,10 +81,19 @@ class WooCommerce_Integration {
                             nonce: '<?php echo wp_create_nonce( "smsenlinea_checkout_nonce" ); ?>'
                         };
 
-                        $.post('<?php echo admin_url('admin-ajax.php'); ?>', data, function(response) {
-                            // Console log silencioso para depuración
-                            // console.log('SmsEnLinea: Datos guardados');
+                        // Usar la URL oficial de Ajax de WooCommerce si existe, sino la de WP
+                        var ajaxUrl = (typeof wc_checkout_params !== 'undefined') ? wc_checkout_params.ajax_url : '<?php echo admin_url('admin-ajax.php'); ?>';
+
+                        $.post(ajaxUrl, data, function(response) {
+                            if(response.success) {
+                                console.log('SmsEnLinea: ✅ Datos guardados en BD');
+                            } else {
+                                console.log('SmsEnLinea: ❌ Error al guardar', response);
+                            }
+                        }).fail(function(xhr) {
+                            console.log('SmsEnLinea: ❌ Error de conexión', xhr.responseText);
                         });
+
                     }, 1500);
                 }
             });
@@ -91,26 +103,22 @@ class WooCommerce_Integration {
     }
 
     /**
-     * 2. CAPTURAR DATOS VIA AJAX
-     * Guarda la sesión en la base de datos temporal.
+     * CAPTURAR DATOS VIA AJAX
      */
     public function capture_checkout_data() {
-        // Verificar seguridad
-        check_ajax_referer( 'smsenlinea_checkout_nonce', 'nonce' );
+        // Verificación de seguridad silenciosa (sin wp_die para no romper JS)
+        if ( ! check_ajax_referer( 'smsenlinea_checkout_nonce', 'nonce', false ) ) {
+            wp_send_json_error('Nonce inválido');
+        }
 
         $phone = isset($_POST['phone']) ? sanitize_text_field($_POST['phone']) : '';
         $email = isset($_POST['email']) ? sanitize_email($_POST['email']) : '';
         
-        // Si no hay teléfono ni email, no guardamos nada
         if ( empty($phone) && empty($email) ) {
-            wp_die();
+            wp_send_json_error('Datos vacíos');
         }
 
-        // Datos adicionales
-        $first_name = isset($_POST['first_name']) ? sanitize_text_field($_POST['first_name']) : 'Cliente';
-        $last_name  = isset($_POST['last_name']) ? sanitize_text_field($_POST['last_name']) : '';
-        
-        // CORRECCIÓN: Asegurar que WooCommerce y el Carrito estén cargados
+        // Cargar entorno de WooCommerce si es necesario
         if ( ! WC()->cart ) {
             WC()->frontend_includes();
             if ( null === WC()->session ) {
@@ -125,95 +133,63 @@ class WooCommerce_Integration {
                 WC()->cart = new \WC_Cart();
             }
         }
+
+        $first_name = isset($_POST['first_name']) ? sanitize_text_field($_POST['first_name']) : 'Cliente';
+        $last_name  = isset($_POST['last_name']) ? sanitize_text_field($_POST['last_name']) : '';
+        $full_name  = trim($first_name . ' ' . $last_name);
         
-        // Obtener contenido del carrito actual
+        // Datos del carrito
         $cart_content = WC()->cart->get_cart();
         $total        = WC()->cart->total;
         $currency     = get_woocommerce_currency();
-        
-        // Generar un link de recuperación del carrito
         $checkout_url = wc_get_checkout_url();
 
-        // Guardar o Actualizar en DB
-        $this->save_session([
-            'phone'       => $phone,
-            'email'       => $email,
-            'name'        => trim($first_name . ' ' . $last_name),
-            'amount'      => $total,
-            'currency'    => $currency,
-            'status'      => 'abandoned', // Estado inicial
-            'cart_data'   => maybe_serialize($cart_content), // Serializar de forma segura
-            'checkout_url'=> $checkout_url
-        ]);
-
-        wp_send_json_success();
-    }
-
-    /**
-     * Lógica auxiliar para guardar en la tabla personalizada
-     */
-    private function save_session( $data ) {
+        // Preparar guardado
         global $wpdb;
         
-        // Limpiamos el teléfono para usarlo como ID único si existe
-        $clean_phone = preg_replace('/[^0-9]/', '', $data['phone']);
-        $email = $data['email'];
-
-        // Intentamos buscar por teléfono O por email si el teléfono está vacío
-        $existing = null;
+        // Limpiar teléfono para búsqueda
+        $clean_phone = preg_replace('/[^0-9]/', '', $phone);
         
+        // Buscar sesión existente por Teléfono O Email
+        $existing = null;
         if ( ! empty( $clean_phone ) ) {
             $existing = $wpdb->get_row( $wpdb->prepare(
                 "SELECT id FROM {$this->table_name} WHERE phone LIKE %s AND status = 'abandoned'", 
                 '%' . $clean_phone . '%'
             ) );
-        } elseif ( ! empty( $email ) ) {
+        } 
+        
+        if ( ! $existing && ! empty( $email ) ) {
             $existing = $wpdb->get_row( $wpdb->prepare(
                 "SELECT id FROM {$this->table_name} WHERE email = %s AND status = 'abandoned'", 
                 $email
             ) );
         }
 
-        $current_time = current_time('mysql');
+        $data_db = [
+            'phone'         => $phone,
+            'email'         => $email,
+            'customer_name' => $full_name,
+            'cart_total'    => $total,
+            'currency'      => $currency,
+            'cart_data'     => maybe_serialize($cart_content),
+            'checkout_url'  => $checkout_url,
+            'last_interaction' => current_time('mysql')
+        ];
 
         if ( $existing ) {
-            // Actualizamos la sesión existente
-            $wpdb->update(
-                $this->table_name,
-                [
-                    'phone'            => $data['phone'], // Actualizar teléfono por si lo añadió después del email
-                    'email'            => $data['email'],
-                    'customer_name'    => $data['name'],
-                    'cart_total'       => $data['amount'],
-                    'last_interaction' => $current_time,
-                    'cart_data'        => $data['cart_data']
-                ],
-                [ 'id' => $existing->id ]
-            );
+            $wpdb->update( $this->table_name, $data_db, ['id' => $existing->id] );
         } else {
-            // Creamos nueva sesión
-            $wpdb->insert(
-                $this->table_name,
-                [
-                    'phone'            => $data['phone'],
-                    'email'            => $data['email'],
-                    'customer_name'    => $data['name'],
-                    'cart_total'       => $data['amount'],
-                    'currency'         => $data['currency'],
-                    'status'           => 'abandoned',
-                    'step'             => 1,
-                    'created_at'       => $current_time,
-                    'last_interaction' => $current_time,
-                    'cart_data'        => $data['cart_data'],
-                    'checkout_url'     => $data['checkout_url']
-                ]
-            );
+            $data_db['status']     = 'abandoned';
+            $data_db['created_at'] = current_time('mysql');
+            $wpdb->insert( $this->table_name, $data_db );
         }
+
+        wp_send_json_success('Guardado ID: ' . ($existing ? $existing->id : $wpdb->insert_id));
     }
 
     /**
-     * 3. MANEJO DE ORDEN FALLIDA
-     * Si el pago falla explícitamente.
+     * MÉTODOS AUXILIARES (Sin cambios mayores, solo mantenimiento)
      */
     public function handle_order_failure( $order_id ) {
         $order = wc_get_order( $order_id );
@@ -222,46 +198,38 @@ class WooCommerce_Integration {
         $phone = $order->get_billing_phone();
         if ( empty( $phone ) ) return;
 
-        // Guardamos explícitamente
-        $this->save_session([
-            'phone'       => $phone,
-            'email'       => $order->get_billing_email(),
-            'name'        => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
-            'amount'      => $order->get_total(),
-            'currency'    => $order->get_currency(),
-            'status'      => 'abandoned', 
-            'cart_data'   => '', 
-            'checkout_url'=> $order->get_checkout_payment_url()
+        $this->manual_db_insert([
+            'phone' => $phone,
+            'email' => $order->get_billing_email(),
+            'name'  => $order->get_billing_first_name(),
+            'total' => $order->get_total(),
+            'curr'  => $order->get_currency(),
+            'url'   => $order->get_checkout_payment_url()
         ]);
     }
 
-    /**
-     * 4. MARCAR COMO RECUPERADO (ÉXITO)
-     * Si el cliente compra, ya no debemos enviarle mensajes de carrito abandonado.
-     */
     public function mark_session_recovered( $order_id ) {
         global $wpdb;
         $order = wc_get_order( $order_id );
         if ( ! $order ) return;
 
-        $phone = $order->get_billing_phone();
+        $phone = preg_replace('/[^0-9]/', '', $order->get_billing_phone());
         $email = $order->get_billing_email();
-        
-        $clean_phone = preg_replace('/[^0-9]/', '', $phone);
 
-        // Actualizamos cualquier sesión 'abandoned' a 'recovered' por teléfono O email
-        if ( ! empty( $clean_phone ) ) {
-            $wpdb->query( $wpdb->prepare(
-                "UPDATE {$this->table_name} SET status = 'recovered' WHERE phone LIKE %s AND status = 'abandoned'",
-                '%' . $clean_phone . '%'
-            ) );
+        if ( ! empty( $phone ) ) {
+            $wpdb->query( $wpdb->prepare("UPDATE {$this->table_name} SET status = 'recovered' WHERE phone LIKE %s", '%' . $phone . '%') );
         }
-        
         if ( ! empty( $email ) ) {
-            $wpdb->query( $wpdb->prepare(
-                "UPDATE {$this->table_name} SET status = 'recovered' WHERE email = %s AND status = 'abandoned'",
-                $email
-            ) );
+            $wpdb->query( $wpdb->prepare("UPDATE {$this->table_name} SET status = 'recovered' WHERE email = %s", $email) );
         }
+    }
+
+    private function manual_db_insert($d) {
+        global $wpdb;
+        $wpdb->insert($this->table_name, [
+            'phone' => $d['phone'], 'email' => $d['email'], 'customer_name' => $d['name'],
+            'cart_total' => $d['total'], 'currency' => $d['curr'], 'status' => 'abandoned',
+            'checkout_url' => $d['url'], 'created_at' => current_time('mysql')
+        ]);
     }
 }
