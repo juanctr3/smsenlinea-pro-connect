@@ -1,5 +1,10 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) { exit; }
+// Lógica para limpiar logs manualmente
+if ( isset( $_POST['smsenlinea_action_clear_logs'] ) && current_user_can( 'manage_options' ) ) {
+    update_option( 'smsenlinea_webhook_logs', [] );
+    echo '<div class="notice notice-success is-dismissible"><p>Historial de logs borrado.</p></div>';
+}
 global $wpdb;
 $table_sessions = $wpdb->prefix . 'smsenlinea_sessions';
 
@@ -139,6 +144,57 @@ if ( $active_tab == 'reports' ) {
                 <p>Copia esta URL en tu panel de SmsEnLinea:</p>
                 <input type="text" value="<?php echo esc_url( $webhook_url ); ?>" readonly onclick="this.select();" style="width:100%; background:#f9f9f9; padding:10px; border:1px dashed #ccc;">
                 <input type="hidden" name="smsenlinea_settings[webhook_secret]" value="<?php echo esc_attr( $secret ); ?>">
+            </div>
+        <div style="margin-top: 30px;">
+                <h3>📡 Monitor de Tráfico en Vivo (Últimos 50 eventos)</h3>
+                <p class="description">Aquí verás en tiempo real qué mensajes llegan a tu sistema y si son aceptados o rechazados.</p>
+                
+                <div class="sms-card" style="padding: 0; overflow: hidden;">
+                    <table class="widefat striped" style="border: none;">
+                        <thead>
+                            <tr style="background: #f0f0f1;">
+                                <th style="padding: 15px;">Hora</th>
+                                <th style="padding: 15px;">Nivel</th>
+                                <th style="padding: 15px;">Detalle del Evento</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php 
+                            // Recuperamos los logs guardados
+                            $webhook_logs = get_option( 'smsenlinea_webhook_logs', [] );
+                            
+                            if ( empty( $webhook_logs ) ) {
+                                echo '<tr><td colspan="3" style="padding: 20px; text-align: center; color: #666;">⏳ No hay actividad registrada aún. Envía un mensaje a tu WhatsApp para probar.</td></tr>';
+                            } else {
+                                foreach ( $webhook_logs as $log ) {
+                                    $color_style = '';
+                                    $badge = '';
+                                    
+                                    if ( $log['level'] === 'error' ) {
+                                        $color_style = 'color: #d63638; background: #fbeaea;';
+                                        $badge = '❌ ERROR';
+                                    } elseif ( $log['level'] === 'warning' ) {
+                                        $color_style = 'color: #996800;';
+                                        $badge = '⚠️ ALERTA';
+                                    } else {
+                                        $badge = 'ℹ️ INFO';
+                                    }
+
+                                    echo "<tr style='$color_style'>";
+                                    echo "<td style='padding: 10px; white-space: nowrap;'>" . esc_html( $log['time'] ) . "</td>";
+                                    echo "<td style='padding: 10px;'><strong>" . esc_html( $badge ) . "</strong></td>";
+                                    echo "<td style='padding: 10px;'>" . esc_html( $log['msg'] ) . "</td>";
+                                    echo "</tr>";
+                                }
+                            }
+                            ?>
+                        </tbody>
+                    </table>
+                    
+                    <div style="padding: 10px; background: #f9f9f9; border-top: 1px solid #ddd; text-align: right;">
+                        <input type="hidden" name="smsenlinea_clear_logs" value="0"> <button type="submit" name="smsenlinea_action_clear_logs" value="1" class="button button-link-delete" onclick="return confirm('¿Borrar historial?');">Limpiar Historial</button>
+                    </div>
+                </div>
             </div>
 
         <?php elseif ( $active_tab == 'strategy' ) : 
@@ -355,4 +411,5 @@ jQuery(document).ready(function($) {
     });
 });
 </script>
+
 
