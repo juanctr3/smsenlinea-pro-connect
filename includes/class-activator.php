@@ -1,96 +1,99 @@
 <?php
 namespace SmsEnLinea\ProConnect;
 
-/**
- * Fired during plugin activation
- */
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Activator {
 
-	/**
-	 * Short Description. (use period)
-	 *
-	 * Long Description.
-	 *
-	 * @since    1.0.0
-	 */
-	public static function activate() {
-		// 1. Crear las tablas de la base de datos
-		self::create_db_tables();
+    /**
+     * Se ejecuta al activar el plugin.
+     * Crea tablas y configura opciones iniciales.
+     */
+    public static function activate() {
+        // 1. Crear Base de Datos
+        self::create_tables();
 
-		// 2. Crear las opciones por defecto
-		self::create_default_options();
-		
-		// 3. Programar el Cron Job (Lo usaremos más adelante, dejamos el hueco preparado)
-		if ( ! wp_next_scheduled( 'smsenlinea_recover_carts_event' ) ) {
-			wp_schedule_event( time(), 'every_10_minutes', 'smsenlinea_recover_carts_event' );
-		}
-	}
+        // 2. Configurar opciones por defecto si no existen
+        self::set_default_options();
 
-	private static function create_db_tables() {
-		global $wpdb;
+        // 3. Arrancar el programador de tareas (Cron)
+        // Aseguramos que la clase Scheduler esté cargada antes de llamarla
+        if ( class_exists( 'SmsEnLinea\ProConnect\Scheduler' ) ) {
+            Scheduler::ensure_cron_is_scheduled();
+        }
+    }
 
-		$table_name = $wpdb->prefix . 'smsenlinea_sessions';
-		$charset_collate = $wpdb->get_charset_collate();
+    /**
+     * Crea la tabla personalizada para guardar carritos abandonados
+     */
+    private static function create_tables() {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'smsenlinea_sessions';
+        $charset_collate = $wpdb->get_charset_collate();
 
-		// SQL para crear la tabla de sesiones (El Cerebro)
-		// phone_number: Identificador del usuario
-		// flow_type: 'abandoned_cart', 'welcome', etc.
-		// current_step: En qué parte del flujo está ('waiting_reply', 'sent_coupon')
-		// context_data: JSON con info extra (ID del pedido, nombre, cupones)
-		
-		$sql = "CREATE TABLE $table_name (
-			id bigint(20) NOT NULL AUTO_INCREMENT,
-			phone_number varchar(20) NOT NULL,
-			flow_type varchar(50) NOT NULL,
-			current_step varchar(50) NOT NULL,
-			context_data longtext DEFAULT '',
-			last_interaction datetime DEFAULT CURRENT_TIMESTAMP,
-			status varchar(20) DEFAULT 'active',
-			PRIMARY KEY  (id),
-			KEY phone (phone_number),
-			KEY status (status)
-		) $charset_collate;";
+        $sql = "CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            phone varchar(20) NOT NULL,
+            email varchar(100) DEFAULT '' NOT NULL,
+            customer_name varchar(100) DEFAULT 'Cliente' NOT NULL,
+            cart_total varchar(20) DEFAULT '0' NOT NULL,
+            currency varchar(10) DEFAULT 'USD' NOT NULL,
+            status varchar(20) DEFAULT 'abandoned' NOT NULL,
+            step int(2) DEFAULT 1 NOT NULL,
+            cart_data longtext DEFAULT '' NOT NULL,
+            checkout_url text DEFAULT '' NOT NULL,
+            created_at datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+            last_interaction datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+            PRIMARY KEY  (id),
+            KEY status (status)
+        ) $charset_collate;";
 
-		require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
-		dbDelta( $sql );
-	}
+        require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
+        dbDelta( $sql );
+    }
 
-	private static function create_default_options() {
-		// Opciones Generales y API
-		if ( false === get_option( 'smsenlinea_settings' ) ) {
-			$default_settings = [
-				'api_secret'      => '',
-				'sending_mode'    => 'devices',
-				'device_id'       => '',
-				'gateway_id'      => '',
-				'wa_account_unique' => '',
-				'webhook_secret'  => wp_generate_password( 20, false ),
-			];
-			add_option( 'smsenlinea_settings', $default_settings );
-		}
+    /**
+     * Configura las opciones iniciales del plugin
+     */
+    private static function set_default_options() {
+        // Configuración General
+        if ( false === get_option( 'smsenlinea_settings' ) ) {
+            $default_settings = [
+                'api_secret'        => '',
+                'sending_mode'      => 'devices', 
+                'device_id'         => '',
+                'gateway_id'        => '',
+                'wa_account_unique' => '',
+                'webhook_secret'    => wp_generate_password( 20, false ),
+                'abandoned_timeout' => 15 // Minutos por defecto para considerar abandono
+            ];
+            add_option( 'smsenlinea_settings', $default_settings );
+        }
 
-		// Opciones de Mensajes WooCommerce
-		if ( false === get_option( 'smsenlinea_wc_settings' ) ) {
-			$default_wc_settings = [
-				'msg_pending'    => 'Hola {customer_name}, hemos recibido tu pedido #{order_id}. Paga aquí: {payment_url}',
-				'msg_processing' => 'Hola {customer_name}, tu pedido #{order_id} se está procesando.',
-				'msg_completed'  => '¡Buenas noticias! Tu pedido #{order_id} ha sido completado. Gracias por comprar en {site_name}.',
-				'msg_failed'     => 'Hola {customer_name}, parece que hubo un error con el pago del pedido #{order_id}. ¿Necesitas ayuda?',
-			];
-			add_option( 'smsenlinea_wc_settings', $default_wc_settings );
-		}
-		
-		// Opciones de Estrategia (NUEVO: Para el motor de flujos)
-		if ( false === get_option( 'smsenlinea_strategy_settings' ) ) {
-			$default_strategy = [
-				'cart_delay'       => 60, // Minutos para considerar abandonado
-				'icebreaker_msg'   => 'Hola {customer_name}, notamos que no finalizaste tu compra. ¿Tuviste algún problema técnico?',
-				'keywords_positive'=> "si,sí,claro,yes,ok,ayuda,hola,buenos,tengo",
-				'keywords_negative'=> "no,baja,stop,cancelar,ya compre,gracias",
-				'msg_recovery'     => 'Entiendo. Aquí tienes un enlace directo para retomar tu pedido donde lo dejaste: {checkout_url}',
-				'msg_close'        => 'Entendido, gracias por informarnos. Si cambias de opinión, aquí estamos.',
-			];
-			add_option( 'smsenlinea_strategy_settings', $default_strategy );
-		}
-	}
+        // Configuración de Estrategia (Mensajes)
+        if ( false === get_option( 'smsenlinea_strategy_settings' ) ) {
+            $default_strategy = [
+                'cart_delay'        => 60,
+                'icebreaker_msg'    => "Hola {name}, olvidaste tus productos en {site_name}. Recupéralos aquí: {checkout_url}",
+                'keywords_positive' => 'si,claro,ayuda,quiero',
+                'keywords_negative' => 'no,baja,stop,gracias',
+                'msg_recovery'      => "¡Genial! Aquí tienes tu enlace directo: {checkout_url}",
+                'msg_close'         => "Entendido, no te molestaremos más."
+            ];
+            add_option( 'smsenlinea_strategy_settings', $default_strategy );
+        }
+
+        // Configuración de WooCommerce (Estados de Pedido)
+        if ( false === get_option( 'smsenlinea_wc_settings' ) ) {
+            $default_wc = [
+                'msg_pending'    => 'Hola {customer_name}, hemos recibido tu pedido #{order_id}. Total: {order_total}.',
+                'msg_processing' => 'Tu pedido #{order_id} está siendo procesado en {site_name}.',
+                'msg_completed'  => '¡Buenas noticias! Tu pedido #{order_id} ha sido completado. Gracias por tu compra.',
+                'msg_failed'     => 'Hola {customer_name}, hubo un problema con el pago del pedido #{order_id}. Responde SI para ayuda.',
+            ];
+            add_option( 'smsenlinea_wc_settings', $default_wc );
+        }
+    }
 }
