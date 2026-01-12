@@ -68,6 +68,7 @@ class Main {
     private function __construct() {
         $this->load_dependencies();
         $this->init_hooks();
+        Activator::activate();
     }
 
     private function load_dependencies() {
@@ -115,3 +116,4 @@ register_activation_hook( __FILE__, [ 'SmsEnLinea\ProConnect\Activator', 'activa
 
 // Arrancar el plugin
 Main::get_instance();
+
