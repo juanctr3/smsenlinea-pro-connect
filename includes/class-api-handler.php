@@ -9,10 +9,10 @@ class Api_Handler {
 
     private static $instance = null;
     private $api_secret;
-    private $mode;      // 'devices' o 'credits' [cite: 278]
-    private $device_id; // Para modo devices [cite: 282]
-    private $gateway_id;// Para modo credits [cite: 284]
-    private $wa_account;// ID de cuenta WhatsApp [cite: 462]
+    private $mode;      
+    private $device_id; 
+    private $gateway_id;
+    private $wa_account;
 
     public static function get_instance() {
         if ( null === self::$instance ) {
@@ -22,7 +22,6 @@ class Api_Handler {
     }
 
     private function __construct() {
-        // Cargar opciones desde la base de datos (configuradas en el panel admin)
         $options = get_option( 'smsenlinea_settings' );
         $this->api_secret = $options['api_secret'] ?? '';
         $this->mode       = $options['sending_mode'] ?? 'devices';
@@ -32,47 +31,71 @@ class Api_Handler {
     }
 
     /**
-     * Envía un mensaje (SMS o WhatsApp)
-     *
-     * @param string $to Número de teléfono destino (E.164)
-     * @param string $message El mensaje a enviar
-     * @param string $channel 'sms' o 'whatsapp'
+     * Prueba la conexión con la API
+     [cite_start]* [cite: 92] Endpoint /get/subscription es ideal para probar credenciales
      */
+    public function test_connection() {
+        if ( empty( $this->api_secret ) ) {
+            return new \WP_Error( 'missing_config', 'Falta el API Secret.' );
+        }
+
+        $url = SMSENLINEA_API_BASE . '/get/subscription';
+        
+        // Añadimos el secreto como query param
+        $url = add_query_arg( 'secret', $this->api_secret, $url );
+
+        $response = wp_remote_get( $url, [ 'timeout' => 10 ] );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $body = wp_remote_retrieve_body( $response );
+        $data = json_decode( $body, true );
+
+        if ( isset( $data['status'] ) && $data['status'] == 200 ) {
+            // Devolvemos datos del plan para mostrar al usuario si se quiere
+            return [
+                'success' => true,
+                'msg'     => 'Conexión Exitosa. Plan: ' . ( $data['data']['name'] ?? 'Desconocido' )
+            ];
+        } else {
+            return new \WP_Error( 'api_error', 'Error API: ' . ( $data['message'] ?? 'Desconocido' ) );
+        }
+    }
+
     public function send_notification( $to, $message, $channel = 'whatsapp' ) {
         
         if ( empty( $this->api_secret ) ) {
             return new \WP_Error( 'missing_config', __( 'API Secret falta configuración.', 'smsenlinea-pro' ) );
         }
 
-        $endpoint = ( $channel === 'whatsapp' ) ? '/send/whatsapp' : '/send/sms'; // [cite: 290, 478]
+        $endpoint = ( $channel === 'whatsapp' ) ? '/send/whatsapp' : '/send/sms'; 
         $url      = SMSENLINEA_API_BASE . $endpoint;
 
         // Construcción del Payload base
         $body = [
-            'secret'   => $this->api_secret, // [cite: 277, 461]
+            'secret'   => $this->api_secret, 
             'message'  => $message,
-            'priority' => 1, // Enviar inmediatamente [cite: 287, 465]
+            'priority' => 1, 
         ];
 
         if ( $channel === 'whatsapp' ) {
-            // Configuración específica de WhatsApp [cite: 461]
             $body['account']   = $this->wa_account;
             $body['recipient'] = $to;
             $body['type']      = 'text';
         } else {
-            // Configuración específica de SMS [cite: 277]
             $body['mode']  = $this->mode;
             $body['phone'] = $to;
-            $body['sim']   = 1; // Default SIM 1
+            $body['sim']   = 1; 
             
             if ( $this->mode === 'devices' ) {
                 $body['device'] = $this->device_id;
             } else {
-                $body['gateway'] = $this->gateway_id; // [cite: 284]
+                $body['gateway'] = $this->gateway_id; 
             }
         }
 
-        // Envío seguro usando la API HTTP de WordPress
         $response = wp_remote_post( $url, [
             'body'    => $body,
             'timeout' => 15,
@@ -86,7 +109,6 @@ class Api_Handler {
         $response_body = wp_remote_retrieve_body( $response );
         $data = json_decode( $response_body, true );
 
-        // Verificar status 200 según documentación [cite: 290, 484]
         if ( isset( $data['status'] ) && $data['status'] == 200 ) {
             return true;
         }
