@@ -32,38 +32,46 @@ class Flow_Engine {
         global $wpdb;
         $table_name = $wpdb->prefix . 'smsenlinea_sessions';
         $api = Api_Handler::get_instance();
-        $options = get_option( 'smsenlinea_settings' );
+        
+        // Obtenemos configuración de estrategia (mensajes personalizados)
+        $strategy_opts = get_option( 'smsenlinea_strategy_settings' );
 
-        // 1. Obtener la Plantilla del Mensaje
-        // Si el usuario no configuró nada en el admin, usamos un mensaje por defecto seguro.
-        $message_template = isset( $options['message_template_1'] ) && ! empty( $options['message_template_1'] )
-            ? $options['message_template_1']
-            : "Hola {name}, notamos que no completaste tu compra. Puedes retomarla aquí: {checkout_url}";
+        // 1. Definir el Mensaje
+        // Usamos el configurado en 'Estrategia' o uno por defecto si está vacío.
+        $message_template = ! empty( $strategy_opts['icebreaker_msg'] ) 
+            ? $strategy_opts['icebreaker_msg'] 
+            : "Hola {name}, notamos que no completaste tu compra en {site_name}. Puedes retomarla aquí: {checkout_url}";
 
         // 2. Preparar Variables para Personalización
-        $full_name = ! empty( $session->customer_name ) ? $session->customer_name : 'Cliente';
-        // Extraer solo el primer nombre para ser más cercano (ej: "Juan" en vez de "Juan Perez")
+        $full_name  = ! empty( $session->customer_name ) ? $session->customer_name : 'Cliente';
         $name_parts = explode( ' ', trim( $full_name ) );
-        $first_name = $name_parts[0];
+        $first_name = $name_parts[0]; // Usamos solo el primer nombre para ser más cercanos
 
-        // Asegurar URL de recuperación
+        // URL de recuperación (si la guardamos en la sesión, la usamos; si no, la genérica)
         $checkout_url = ! empty( $session->checkout_url ) ? $session->checkout_url : wc_get_checkout_url();
 
-        // 3. Reemplazar "Etiquetas" (Merge Tags) en el mensaje
-        $message = str_replace( '{name}', $first_name, $message_template );
-        $message = str_replace( '{fullname}', $full_name, $message );
-        $message = str_replace( '{checkout_url}', $checkout_url, $message );
-        $message = str_replace( '{total}', $session->cart_total . ' ' . $session->currency, $message );
+        // 3. Reemplazar "Etiquetas" (Merge Tags)
+        $replacements = [
+            '{name}'         => $first_name,
+            '{fullname}'     => $full_name,
+            '{checkout_url}' => $checkout_url,
+            '{total}'        => $session->cart_total . ' ' . $session->currency,
+            '{site_name}'    => get_bloginfo( 'name' ),
+        ];
 
-        // 4. Enviar Mensaje (Usando WhatsApp por defecto)
-        // Nota: Esto depende de que Api_Handler tenga el método send_notification funcionando.
+        $message = str_replace( array_keys( $replacements ), array_values( $replacements ), $message_template );
+
+        // 4. Enviar Mensaje
+        // Por defecto usamos WhatsApp. En V2 podríamos añadir lógica para probar SMS si no tiene WP.
         $response = $api->send_notification( $session->phone, $message, 'whatsapp' );
 
         $current_time = current_time( 'mysql' );
 
         // 5. Actualizar Base de Datos según el resultado
-        if ( is_wp_error( $response ) ) {
-            // Si falla, marcamos error para no reintentar infinitamente en el mismo ciclo
+        // Api_Handler devuelve 'false' o WP_Error si falla
+        if ( $response === false || is_wp_error( $response ) ) {
+            
+            // Falló el envío: Marcamos error para revisarlo, pero actualizamos fecha para no reintentar inmediatamente
             $wpdb->update(
                 $table_name,
                 [ 
@@ -73,14 +81,16 @@ class Flow_Engine {
                 [ 'id' => $session->id ]
             );
             return false;
+
         } else {
-            // ¡Éxito!
-            // Cambiamos el estado a 'contacted' para cerrar el ciclo de "abandono"
+            
+            // ¡Éxito! Mensaje enviado.
+            // Cambiamos estado a 'contacted' (esperando respuesta del cliente)
             $wpdb->update(
                 $table_name,
                 [ 
                     'status' => 'contacted', 
-                    'step' => 1, // Marcamos que ya pasó el paso 1
+                    'step'   => 1, // Indica que ya enviamos el primer mensaje
                     'last_interaction' => $current_time 
                 ],
                 [ 'id' => $session->id ]
