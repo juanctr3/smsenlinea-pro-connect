@@ -115,4 +115,57 @@ class Api_Handler {
 
         return false;
     }
+/**
+     * Verifica la conexión y obtiene el estado del plan
+     * [Nuevo en V2] - Permite mostrar créditos y validar API Key
+     *
+     * @param string|null $secret_override Opcional. Usar una clave específica en lugar de la guardada.
+     * @return array|WP_Error Datos del plan o error.
+     */
+    public function check_connection_and_status( $secret_override = null ) {
+        
+        $secret = $secret_override ? $secret_override : $this->api_secret;
+
+        if ( empty( $secret ) ) {
+            return new \WP_Error( 'missing_secret', __( 'No hay API Secret definida.', 'smsenlinea-pro' ) );
+        }
+
+        // Endpoint para obtener paquete de suscripción
+        $url = SMSENLINEA_API_BASE . '/get/subscription';
+        
+        // Añadimos el secreto como parámetro query string
+        $url = add_query_arg( 'secret', $secret, $url );
+
+        $response = wp_remote_get( $url, [
+            'timeout' => 10,
+            'sslverify' => true, // Importante para seguridad en Envato
+        ] );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $body = wp_remote_retrieve_body( $response );
+        $data = json_decode( $body, true );
+
+        // Validación basada en la respuesta de la API (Status 200)
+        if ( isset( $data['status'] ) && $data['status'] == 200 ) {
+            
+            // Guardamos la información del plan en un 'transient' (caché temporal de 1 hora)
+            // para no consultar la API en cada carga de página del admin.
+            if ( isset( $data['data'] ) ) {
+                set_transient( 'smsenlinea_plan_data', $data['data'], HOUR_IN_SECONDS );
+            }
+
+            return [
+                'success' => true,
+                'message' => $data['message'] ?? 'Conectado correctamente',
+                'data'    => $data['data'] ?? []
+            ];
+        } else {
+            // Si la API responde con error (ej: clave inválida)
+            return new \WP_Error( 'api_error', $data['message'] ?? 'Error desconocido en API' );
+        }
+    }
 }
+
