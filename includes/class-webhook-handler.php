@@ -5,6 +5,10 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+/**
+ * Webhook Handler
+ * Recibe los mensajes y se los pasa al Motor de Flujos (Cerebro).
+ */
 class Webhook_Handler {
 
     private static $instance = null;
@@ -25,30 +29,35 @@ class Webhook_Handler {
     }
 
     public function register_routes() {
+        // Endpoint: /wp-json/smsenlinea/v1/webhook
         register_rest_route( 'smsenlinea/v1', '/webhook', [
             'methods'  => 'POST',
             'callback' => [ $this, 'process_webhook' ],
-            'permission_callback' => '__return_true',
+            'permission_callback' => '__return_true', // Validamos el secreto manualmente
         ] );
     }
 
     public function process_webhook( \WP_REST_Request $request ) {
         $params = $request->get_params();
 
-        // Validación de Seguridad
+        // 1. Validación de Seguridad
+        // Buscamos el secreto en el cuerpo (POST) o en la URL (GET)
         $incoming_secret = isset($params['secret']) ? $params['secret'] : ( isset($_GET['secret']) ? $_GET['secret'] : '' );
 
         if ( empty( $this->webhook_secret ) || $incoming_secret !== $this->webhook_secret ) {
             return new \WP_Error( 'forbidden', 'Invalid or Missing Secret', [ 'status' => 403 ] );
         }
 
+        // 2. Extracción de Datos
         $type = isset($params['type']) ? $params['type'] : '';
         $data = isset($params['data']) ? $params['data'] : [];
 
+        // Solo procesamos SMS y WhatsApp
         if ( ! in_array( $type, [ 'sms', 'whatsapp' ] ) ) {
             return rest_ensure_response( [ 'success' => true, 'msg' => 'Ignored type' ] );
         }
 
+        // Obtener teléfono y mensaje de forma segura
         $incoming_phone = isset( $data['wid'] ) ? $data['wid'] : ( isset($data['phone']) ? $data['phone'] : '' );
         $incoming_msg   = isset( $data['message'] ) ? trim( $data['message'] ) : '';
 
@@ -56,35 +65,17 @@ class Webhook_Handler {
             return rest_ensure_response( [ 'success' => false, 'msg' => 'No phone/msg' ] );
         }
 
-        $this->handle_conversational_logic( $incoming_phone, $incoming_msg );
+        // 3. CONEXIÓN CON EL CEREBRO
+        // Delegamos la inteligencia al Flow_Engine. 
+        // Él decidirá si este mensaje es una respuesta a un carrito abandonado o no.
+        $engine = Flow_Engine::get_instance();
+        $processed = $engine->process_reply( $incoming_phone, $incoming_msg );
 
-        return rest_ensure_response( [ 'success' => true ] );
-    }
-
-    private function handle_conversational_logic( $phone, $message ) {
-        $clean_phone = preg_replace( '/[^0-9]/', '', $phone );
-        $recovery_data = get_transient( 'smsenlinea_recovery_' . $clean_phone );
-
-        if ( ! $recovery_data || ! is_array( $recovery_data ) ) {
-            return;
+        if ( $processed ) {
+             return rest_ensure_response( [ 'success' => true, 'msg' => 'Processed by Flow Engine' ] );
         }
 
-        $api = Api_Handler::get_instance();
-        $message_upper = strtoupper( $message );
-
-        if ( $message_upper === 'SI' ) {
-            $order_id = $recovery_data['order_id'];
-            $admin_email = get_option( 'admin_email' );
-            
-            wp_mail( $admin_email, "Alerta Soporte Orden #$order_id", "El cliente quiere recuperar su pedido #$order_id." );
-
-            $support_link = home_url( '/contacto' ); 
-            $api->send_notification( $phone, "¡Gracias! Un agente te contactará. Link: $support_link", 'whatsapp' );
-
-            delete_transient( 'smsenlinea_recovery_' . $clean_phone );
-
-        } elseif ( $message_upper === 'NO' ) {
-            delete_transient( 'smsenlinea_recovery_' . $clean_phone );
-        }
+        // Si no había sesión activa, aquí podrías agregar lógica para mensajes nuevos (ej: soporte general)
+        return rest_ensure_response( [ 'success' => true, 'msg' => 'No active flow for this user' ] );
     }
 }
