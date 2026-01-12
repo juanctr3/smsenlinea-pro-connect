@@ -1,6 +1,8 @@
 <?php
 namespace SmsEnLinea\ProConnect\Admin;
 
+use SmsEnLinea\ProConnect\Api_Handler;
+
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -13,7 +15,10 @@ class Admin_Settings {
     public function __construct() {
         add_action( 'admin_menu', [ $this, 'add_plugin_page' ] );
         add_action( 'admin_init', [ $this, 'page_init' ] );
-        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_styles' ] );
+        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
+        
+        // AJAX para Test de Conexión
+        add_action( 'wp_ajax_smsenlinea_test_connection', [ $this, 'ajax_test_connection' ] );
     }
 
     public function add_plugin_page() {
@@ -23,33 +28,43 @@ class Admin_Settings {
             'manage_options',
             'smsenlinea-pro',
             [ $this, 'create_admin_page' ],
-            'dashicons-smartphone', // Icono nativo
+            'dashicons-smartphone', 
             55
         );
     }
 
     public function create_admin_page() {
-        // Cargar datos
         $settings = get_option( $this->options_slug );
         $wc_settings = get_option( $this->wc_options_slug );
         
-        // Cargar vista HTML separada para limpieza
         require_once SMSENLINEA_PATH . 'includes/admin/views/settings-page.php';
     }
 
-    public function enqueue_styles( $hook ) {
+    public function enqueue_scripts( $hook ) {
         if ( 'toplevel_page_smsenlinea-pro' !== $hook ) {
             return;
         }
-        // Aquí podrías cargar CSS real, por ahora usaremos estilos inline en la vista para simplificar
-        // wp_enqueue_style( 'smsenlinea-admin', SMSENLINEA_URL . 'assets/css/admin.css', [], SMSENLINEA_VERSION );
+        // Cargamos script para el botón de Test y Emojis (usando WP Color Picker como base o JS simple)
+        wp_enqueue_script( 'jquery' );
+    }
+
+    public function ajax_test_connection() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Permisos insuficientes.' );
+        }
+
+        $api = Api_Handler::get_instance();
+        $result = $api->test_connection();
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        } else {
+            wp_send_json_success( $result['msg'] );
+        }
     }
 
     public function page_init() {
-        // Registro de grupo de opciones generales
         register_setting( 'smsenlinea_option_group', $this->options_slug, [ $this, 'sanitize_settings' ] );
-        
-        // Registro de grupo de opciones WooCommerce
         register_setting( 'smsenlinea_wc_group', $this->wc_options_slug, [ $this, 'sanitize_text_array' ] );
     }
 
@@ -66,6 +81,7 @@ class Admin_Settings {
     }
 
     public function sanitize_text_array( $input ) {
+        // Permitimos emojis y multilínea
         return array_map( 'sanitize_textarea_field', $input );
     }
 }
