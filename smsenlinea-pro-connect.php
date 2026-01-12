@@ -2,8 +2,8 @@
 /**
  * Plugin Name: SmsEnLinea Pro Connect
  * Plugin URI:  https://smsenlinea.com
- * Description: Integración profesional para notificaciones WhatsApp/SMS y Marketing Conversacional con recuperación de carritos.
- * Version:     1.0.0
+ * Description: Integración profesional para notificaciones WhatsApp/SMS y Marketing Conversacional con recuperación de carritos abandonados.
+ * Version:     2.0.0
  * Author:      SmsEnLinea
  * Author URI:  https://smsenlinea.com
  * Text Domain: smsenlinea-pro
@@ -18,20 +18,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Definición de Constantes
-define( 'SMSENLINEA_VERSION', '1.0.0' );
+define( 'SMSENLINEA_VERSION', '2.0.0' );
 define( 'SMSENLINEA_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SMSENLINEA_URL', plugin_dir_url( __FILE__ ) );
 define( 'SMSENLINEA_API_BASE', 'https://whatsapp.smsenlinea.com/api' );
 
-// 1. HOOK DE ACTIVACIÓN (Vital para crear la tabla de base de datos)
-register_activation_hook( __FILE__, [ 'SmsEnLinea\\ProConnect\\Activator', 'activate' ] );
-
-// 2. HOOK DE DESACTIVACIÓN (Nuevo: Limpia el Cron Job al quitar el plugin)
-register_deactivation_hook( __FILE__, function() {
-    wp_clear_scheduled_hook( 'smsenlinea_recover_carts_event' );
-});
-
-// 3. AUTOLOADER ROBUSTO
+// Autoloader simple para clases
 spl_autoload_register( function ( $class ) {
     $prefix = 'SmsEnLinea\\ProConnect\\';
     $base_dir = SMSENLINEA_PATH . 'includes/';
@@ -42,18 +34,17 @@ spl_autoload_register( function ( $class ) {
     }
 
     $relative_class = substr( $class, $len );
-    $parts = explode( '\\', $relative_class );
-    $class_name = array_pop( $parts );
     
-    // Convertir nombre de clase a formato de archivo (class-nombre-clase.php)
+    // Mapeo de namespace a estructura de archivos
+    // Ejemplo: Admin\Admin_Settings -> includes/admin/class-admin-settings.php
+    $file_parts = explode( '\\', $relative_class );
+    $class_name = array_pop( $file_parts );
+    $folder_path = ! empty( $file_parts ) ? implode( '/', array_map( 'strtolower', $file_parts ) ) . '/' : '';
+    
+    // Normalizar nombre de archivo (PascalCase a kebab-case)
     $file_name = 'class-' . str_replace( '_', '-', strtolower( $class_name ) ) . '.php';
-
-    $sub_dir = '';
-    if ( ! empty( $parts ) ) {
-        $sub_dir = str_replace( '_', '-', strtolower( implode( '/', $parts ) ) ) . '/';
-    }
-
-    $file = $base_dir . $sub_dir . $file_name;
+    
+    $file = $base_dir . $folder_path . $file_name;
 
     if ( file_exists( $file ) ) {
         require $file;
@@ -80,39 +71,47 @@ class Main {
     }
 
     private function load_dependencies() {
-        // Inicializar integración con API
+        // 1. Núcleo de Comunicaciones
         Api_Handler::get_instance();
-        
-        // Inicializar Webhook Listener
         Webhook_Handler::get_instance();
         
-        // NUEVO: Inicializar el Vigilante (Scheduler)
-        // Esto es obligatorio para que el Cron Job funcione
+        // 2. Motor de Recuperación (El Reloj y el Cerebro) [Nuevo V2]
         Scheduler::get_instance();
+        Flow_Engine::get_instance();
 
-        // Inicializar Integraciones
+        // 3. Panel de Administración
+        if ( is_admin() ) {
+            new Admin\Admin_Settings();
+        }
+
+        // 4. Integraciones (Solo si los plugins están activos)
         if ( class_exists( 'WooCommerce' ) ) {
-            new Integrations\Woocommerce_Integration();
+            // Nota: El nombre de la clase debe coincidir con el archivo class-woocommerce-integration.php
+            // El autoloader buscará Integrations/Woocommerce_Integration
+            Integrations\WooCommerce_Integration::get_instance();
+        }
+
+        if ( class_exists( 'GFForms' ) ) {
+            new Integrations\Gravity_Forms();
         }
         
+        // CF7 integración
         if ( defined( 'WPCF7_VERSION' ) ) {
-             new Integrations\Contact_Form_7();
+            new Integrations\Contact_Form_7();
         }
     }
 
     private function init_hooks() {
         add_action( 'plugins_loaded', [ $this, 'load_textdomain' ] );
-        
-        // Inicializar el Panel de Admin
-        if ( is_admin() ) {
-            new Admin\Admin_Settings();
-        }
     }
 
     public function load_textdomain() {
         load_plugin_textdomain( 'smsenlinea-pro', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
     }
 }
+
+// Registrar Hook de Activación para crear tablas DB
+register_activation_hook( __FILE__, [ 'SmsEnLinea\ProConnect\Activator', 'activate' ] );
 
 // Arrancar el plugin
 Main::get_instance();
