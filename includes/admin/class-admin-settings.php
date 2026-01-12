@@ -18,6 +18,7 @@ class Admin_Settings {
         add_action( 'admin_menu', [ $this, 'add_plugin_page' ] );
         add_action( 'admin_init', [ $this, 'page_init' ] );
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
+        add_action( 'wp_ajax_smsenlinea_check_connection', [ $this, 'ajax_check_connection' ] );
         
         // AJAX Hooks
         add_action( 'wp_ajax_smsenlinea_test_connection', [ $this, 'ajax_test_connection' ] );
@@ -98,4 +99,34 @@ class Admin_Settings {
         if ( ! is_array( $input ) ) { return []; }
         return array_map( 'wp_kses_post', $input );
     }
+    /**
+     * AJAX Handler: Recibe la petición del botón "Probar Conexión",
+     * verifica credenciales y devuelve el plan actual.
+     */
+    public function ajax_check_connection() {
+        // 1. Seguridad: Verificar permisos de administrador
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Permisos insuficientes' );
+        }
+
+        // 2. Obtener el secreto enviado desde el formulario (sin guardar aún)
+        $secret = isset( $_POST['secret'] ) ? sanitize_text_field( $_POST['secret'] ) : '';
+
+        if ( empty( $secret ) ) {
+            wp_send_json_error( 'Por favor ingresa un API Secret.' );
+        }
+
+        // 3. Llamar a la lógica que creamos en el paso anterior
+        $api = \SmsEnLinea\ProConnect\Api_Handler::get_instance();
+        $result = $api->check_connection_and_status( $secret );
+
+        // 4. Devolver respuesta JSON al navegador
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        } else {
+            // Si es exitoso, enviamos los datos del plan
+            wp_send_json_success( $result );
+        }
+    }
 }
+
