@@ -16,14 +16,12 @@ class Admin_Settings {
         add_action( 'admin_menu', [ $this, 'add_plugin_page' ] );
         add_action( 'admin_init', [ $this, 'page_init' ] );
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
-        
-        // AJAX para Test de Conexión
         add_action( 'wp_ajax_smsenlinea_test_connection', [ $this, 'ajax_test_connection' ] );
     }
 
     public function add_plugin_page() {
         add_menu_page(
-            __( 'SmsEnLinea Pro', 'smsenlinea-pro' ),
+            'SmsEnLinea Pro',
             'SmsEnLinea',
             'manage_options',
             'smsenlinea-pro',
@@ -37,14 +35,19 @@ class Admin_Settings {
         $settings = get_option( $this->options_slug );
         $wc_settings = get_option( $this->wc_options_slug );
         
-        require_once SMSENLINEA_PATH . 'includes/admin/views/settings-page.php';
+        // Verificar que el archivo de vista existe antes de llamarlo
+        $view_file = SMSENLINEA_PATH . 'includes/admin/views/settings-page.php';
+        if ( file_exists( $view_file ) ) {
+            require_once $view_file;
+        } else {
+            echo '<div class="error"><p>Error: Archivo de vista no encontrado.</p></div>';
+        }
     }
 
     public function enqueue_scripts( $hook ) {
         if ( 'toplevel_page_smsenlinea-pro' !== $hook ) {
             return;
         }
-        // Cargamos script para el botón de Test y Emojis (usando WP Color Picker como base o JS simple)
         wp_enqueue_script( 'jquery' );
     }
 
@@ -70,18 +73,18 @@ class Admin_Settings {
 
     public function sanitize_settings( $input ) {
         $new_input = [];
-        if( isset( $input['api_secret'] ) ) $new_input['api_secret'] = sanitize_text_field( $input['api_secret'] );
-        if( isset( $input['sending_mode'] ) ) $new_input['sending_mode'] = sanitize_text_field( $input['sending_mode'] );
-        if( isset( $input['device_id'] ) ) $new_input['device_id'] = sanitize_text_field( $input['device_id'] );
-        if( isset( $input['gateway_id'] ) ) $new_input['gateway_id'] = sanitize_text_field( $input['gateway_id'] );
-        if( isset( $input['wa_account_unique'] ) ) $new_input['wa_account_unique'] = sanitize_text_field( $input['wa_account_unique'] );
-        if( isset( $input['webhook_secret'] ) ) $new_input['webhook_secret'] = sanitize_text_field( $input['webhook_secret'] );
-        
+        if( is_array($input) ) {
+            foreach($input as $key => $val) {
+                $new_input[$key] = sanitize_text_field($val);
+            }
+        }
         return $new_input;
     }
 
     public function sanitize_text_array( $input ) {
-        // Permitimos emojis y multilínea
+        if ( ! is_array( $input ) ) {
+            return [];
+        }
         return array_map( 'sanitize_textarea_field', $input );
     }
 }
