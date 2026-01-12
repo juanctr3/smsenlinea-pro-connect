@@ -1,118 +1,132 @@
 <?php
 namespace SmsEnLinea\ProConnect\Admin;
 
-/**
- * Class Admin_Settings
- * Maneja la creación del menú, el registro de opciones y las peticiones AJAX del admin.
- */
+use SmsEnLinea\ProConnect\Api_Handler;
+use SmsEnLinea\ProConnect\Scheduler; // Importante: Importar el Scheduler
+
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
 class Admin_Settings {
 
-    private $options;
+    private $options_slug = 'smsenlinea_settings';
+    private $wc_options_slug = 'smsenlinea_wc_settings';
+    private $strategy_slug = 'smsenlinea_strategy_settings';
 
     public function __construct() {
-        add_action( 'admin_menu', [ $this, 'add_admin_menu' ] );
-        add_action( 'admin_init', [ $this, 'register_settings' ] );
-        
-        // Hooks AJAX
-        // 1. Probar conexión API
+        add_action( 'admin_menu', [ $this, 'add_plugin_page' ] );
+        add_action( 'admin_init', [ $this, 'page_init' ] );
+        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
         add_action( 'wp_ajax_smsenlinea_check_connection', [ $this, 'ajax_check_connection' ] );
         
-        // 2. Disparador Manual de Cron (Para pruebas generales)
-        add_action( 'wp_ajax_smsenlinea_trigger_cron', [ 'SmsEnLinea\ProConnect\Scheduler', 'ajax_manual_trigger' ] );
-
-        // 3. [NUEVO] Recuperación Manual de un Carrito Específico
-        add_action( 'wp_ajax_smsenlinea_manual_recovery', [ $this, 'ajax_manual_recovery' ] );
+        // AJAX Hooks
+        add_action( 'wp_ajax_smsenlinea_test_connection', [ $this, 'ajax_test_connection' ] );
+        
+        // NUEVO: Hook para disparo manual de recuperación
+        add_action( 'wp_ajax_smsenlinea_trigger_cron', [ $this, 'ajax_trigger_cron' ] );
     }
 
-    public function add_admin_menu() {
+    public function add_plugin_page() {
         add_menu_page(
-            'SmsEnLinea Pro', 
-            'SmsEnLinea Pro', 
-            'manage_options', 
-            'smsenlinea-pro', 
-            [ $this, 'create_admin_page' ], 
-            'dashicons-whatsapp', 
-            56
+            'SmsEnLinea Pro',
+            'SmsEnLinea',
+            'manage_options',
+            'smsenlinea-pro',
+            [ $this, 'create_admin_page' ],
+            'dashicons-smartphone', 
+            55
         );
     }
 
-    public function register_settings() {
-        register_setting( 'smsenlinea_settings_group', 'smsenlinea_settings' );
-        register_setting( 'smsenlinea_settings_group', 'smsenlinea_strategy_settings' );
-        register_setting( 'smsenlinea_settings_group', 'smsenlinea_wc_settings' );
-    }
-
     public function create_admin_page() {
-        $this->options = get_option( 'smsenlinea_settings' );
-        // Cargamos la vista (el HTML)
-        require_once SMSENLINEA_PATH . 'includes/admin/views/settings-page.php';
+        // Pasamos $wpdb a la vista para los reportes
+        global $wpdb;
+        $view_file = SMSENLINEA_PATH . 'includes/admin/views/settings-page.php';
+        if ( file_exists( $view_file ) ) {
+            require_once $view_file;
+        }
     }
 
+    public function enqueue_scripts( $hook ) {
+        if ( 'toplevel_page_smsenlinea-pro' !== $hook ) {
+            return;
+        }
+        wp_enqueue_script( 'jquery' );
+    }
+
+    public function ajax_test_connection() {
+        if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Sin permisos' );
+
+        $api = Api_Handler::get_instance();
+        $result = $api->test_connection();
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        } else {
+            wp_send_json_success( $result['msg'] );
+        }
+    }
+
+    // NUEVO: Función para ejecutar el vigilante manualmente
+    public function ajax_trigger_cron() {
+        if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Sin permisos' );
+
+        // Llamamos al Vigilante directamente
+        $scheduler = Scheduler::get_instance();
+        $scheduler->check_abandoned_carts();
+
+        wp_send_json_success( 'Revisión de carritos ejecutada correctamente.' );
+    }
+
+    public function page_init() {
+        register_setting( 'smsenlinea_option_group', $this->options_slug, [ $this, 'sanitize_settings' ] );
+        register_setting( 'smsenlinea_wc_group', $this->wc_options_slug, [ $this, 'sanitize_text_array' ] );
+        register_setting( 'smsenlinea_strategy_group', $this->strategy_slug, [ $this, 'sanitize_text_array' ] );
+    }
+
+    public function sanitize_settings( $input ) {
+        $new_input = [];
+        if( is_array($input) ) {
+            foreach($input as $key => $val) {
+                $new_input[$key] = sanitize_text_field($val);
+            }
+        }
+        return $new_input;
+    }
+
+    public function sanitize_text_array( $input ) {
+        if ( ! is_array( $input ) ) { return []; }
+        return array_map( 'wp_kses_post', $input );
+    }
     /**
-     * AJAX: Prueba de conexión y obtención de plan
+     * AJAX Handler: Recibe la petición del botón "Probar Conexión",
+     * verifica credenciales y devuelve el plan actual.
      */
     public function ajax_check_connection() {
+        // 1. Seguridad: Verificar permisos de administrador
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( 'Permisos insuficientes' );
         }
 
+        // 2. Obtener el secreto enviado desde el formulario (sin guardar aún)
         $secret = isset( $_POST['secret'] ) ? sanitize_text_field( $_POST['secret'] ) : '';
 
         if ( empty( $secret ) ) {
             wp_send_json_error( 'Por favor ingresa un API Secret.' );
         }
 
+        // 3. Llamar a la lógica que creamos en el paso anterior
         $api = \SmsEnLinea\ProConnect\Api_Handler::get_instance();
         $result = $api->check_connection_and_status( $secret );
 
+        // 4. Devolver respuesta JSON al navegador
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( $result->get_error_message() );
         } else {
+            // Si es exitoso, enviamos los datos del plan
             wp_send_json_success( $result );
         }
     }
-
-    /**
-     * AJAX [NUEVO]: Fuerza el envío del mensaje de recuperación para un carrito específico
-     */
-    public function ajax_manual_recovery() {
-        // 1. Seguridad
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( 'Acceso denegado.' );
-        }
-
-        check_ajax_referer( 'smsenlinea_manual_action', 'nonce' );
-
-        // 2. Obtener ID de sesión
-        $session_id = isset( $_POST['id'] ) ? intval( $_POST['id'] ) : 0;
-
-        if ( $session_id <= 0 ) {
-            wp_send_json_error( 'ID de sesión inválido.' );
-        }
-
-        // 3. Obtener datos de la BD
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'smsenlinea_sessions';
-        $session = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_name WHERE id = %d", $session_id ) );
-
-        if ( ! $session ) {
-            wp_send_json_error( 'El carrito no existe.' );
-        }
-
-        // 4. Ejecutar el Motor de Flujo
-        $engine = \SmsEnLinea\ProConnect\Flow_Engine::get_instance();
-        
-        // Forzamos el envío aunque el tiempo no haya pasado (es manual)
-        $result = $engine->run_recovery_sequence( $session );
-
-        if ( $result ) {
-            wp_send_json_success( 'Mensaje enviado correctamente.' );
-        } else {
-            wp_send_json_error( 'Falló el envío. Revisa los logs o credenciales.' );
-        }
-    }
 }
+
