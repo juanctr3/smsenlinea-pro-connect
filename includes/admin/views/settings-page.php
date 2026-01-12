@@ -1,415 +1,391 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) { exit; }
-// Lógica para limpiar logs manualmente
-if ( isset( $_POST['smsenlinea_action_clear_logs'] ) && current_user_can( 'manage_options' ) ) {
-    update_option( 'smsenlinea_webhook_logs', [] );
-    echo '<div class="notice notice-success is-dismissible"><p>Historial de logs borrado.</p></div>';
-}
+
 global $wpdb;
 $table_sessions = $wpdb->prefix . 'smsenlinea_sessions';
 
-// Lógica básica para obtener estadísticas si estamos en la pestaña reportes
-$stats = [
-    'total' => 0, 'recovered' => 0, 'lost' => 0, 'money' => 0
-];
-$logs = [];
-
+// --- LÓGICA DE PESTAÑAS Y DATOS ---
 $active_tab = isset( $_GET['tab'] ) ? $_GET['tab'] : 'general';
 
+// Si estamos en la pestaña 'carts' (Carritos), consultamos la base de datos
+$carts_list = [];
+if ( $active_tab == 'carts' ) {
+    // Obtenemos los últimos 50 carritos, ordenados por fecha
+    $carts_list = $wpdb->get_results( "SELECT * FROM $table_sessions ORDER BY created_at DESC LIMIT 50" );
+}
+
+// Lógica para estadísticas (Pestaña Reportes)
+$stats = [ 'total' => 0, 'recovered' => 0, 'lost' => 0, 'money' => 0 ];
 if ( $active_tab == 'reports' ) {
-    // 1. Contar totales
     $stats['total']     = $wpdb->get_var( "SELECT COUNT(*) FROM $table_sessions" );
     $stats['recovered'] = $wpdb->get_var( "SELECT COUNT(*) FROM $table_sessions WHERE status = 'recovered'" );
-    $stats['lost']      = $wpdb->get_var( "SELECT COUNT(*) FROM $table_sessions WHERE status = 'rejected'" );
-    
-    // 2. Obtener historial reciente
-    $logs = $wpdb->get_results( "SELECT * FROM $table_sessions ORDER BY last_interaction DESC LIMIT 50" );
+    $stats['lost']      = $wpdb->get_var( "SELECT COUNT(*) FROM $table_sessions WHERE status = 'failed_send' OR status = 'rejected'" );
+    $logs = get_option( 'smsenlinea_webhook_logs', [] );
 }
 ?>
 
 <style>
     .sms-wrap { max-width: 1050px; margin: 20px auto; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif; }
-    
-    /* Header & Nav */
-    .sms-header { background: #fff; padding: 20px 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 25px; display: flex; align-items: center; justify-content: space-between; border-left: 5px solid #2271b1; }
+    .sms-header { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
     .sms-header h1 { margin: 0; font-size: 24px; color: #1d2327; font-weight: 600; }
-    .sms-nav { display: flex; border-bottom: 2px solid #ddd; margin-bottom: 25px; padding-bottom: 1px; }
-    .sms-nav a { padding: 12px 20px; text-decoration: none; color: #50575e; font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -3px; transition: all 0.2s; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+    .sms-badge { background: #2271b1; color: #fff; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+    
+    /* Navegación */
+    .sms-nav { display: flex; gap: 5px; margin-bottom: 20px; border-bottom: 1px solid #c3c4c7; }
+    .sms-nav a { text-decoration: none; color: #50575e; padding: 10px 15px; border: 1px solid transparent; border-bottom: none; border-radius: 4px 4px 0 0; font-weight: 500; transition: all 0.2s; }
     .sms-nav a:hover { color: #2271b1; background: #f6f7f7; }
-    .sms-nav a.active { border-bottom: 2px solid #2271b1; color: #2271b1; font-weight: 600; background: #fff; border-radius: 4px 4px 0 0; }
-    
-    /* Cards & Forms */
-    .sms-card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); padding: 30px; margin-bottom: 20px; border: 1px solid #e2e4e7; position: relative; }
-    .sms-card h3 { margin-top: 0; padding-bottom: 15px; border-bottom: 1px solid #f0f0f1; font-size: 16px; text-transform: uppercase; letter-spacing: 0.5px; color: #646970; }
-    .sms-form-group { margin-bottom: 20px; }
-    .sms-form-group label { display: block; font-weight: 600; margin-bottom: 8px; color: #1d2327; }
-    .sms-form-group input[type="text"], .sms-form-group input[type="password"], .sms-form-group select, .sms-form-group textarea, .sms-form-group input[type="number"] { width: 100%; max-width: 100%; padding: 8px 12px; border: 1px solid #c3c4c7; border-radius: 4px; font-size: 14px; }
-    .sms-form-group textarea { height: 100px; line-height: 1.4; }
-    .sms-helper { font-size: 13px; color: #646970; margin-top: 6px; font-style: italic; }
-    
-    /* Buttons */
-    .sms-btn-primary { background: #2271b1 !important; color: #fff !important; border: none !important; border-radius: 4px !important; padding: 10px 20px !important; font-size: 15px !important; cursor: pointer; transition: background 0.3s; }
-    .sms-btn-primary:hover { background: #135e96 !important; }
-    .emoji-btn { background: #f6f7f7; border: 1px solid #c3c4c7; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 13px; margin-top: 5px; }
-    .emoji-btn:hover { background: #fff; border-color: #2271b1; color: #2271b1; }
-    
-    /* Dashboard Stats */
-    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; }
-    .stat-box { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #e2e4e7; text-align: center; }
-    .stat-number { font-size: 32px; font-weight: 700; color: #2271b1; display: block; margin-bottom: 5px; }
-    .stat-label { font-size: 13px; text-transform: uppercase; color: #646970; font-weight: 600; }
-    
-    /* Table */
-    .logs-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; border: 1px solid #e2e4e7; }
-    .logs-table th { background: #f6f7f7; text-align: left; padding: 15px; font-weight: 600; color: #1d2327; border-bottom: 1px solid #e2e4e7; }
-    .logs-table td { padding: 15px; border-bottom: 1px solid #f0f0f1; color: #50575e; font-size: 14px; }
-    .logs-table tr:last-child td { border-bottom: none; }
-    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-    .badge.recovered { background: #e7f7ed; color: #107e3e; }
-    .badge.rejected { background: #fbeaea; color: #d63638; }
-    .badge.active { background: #fff8e5; color: #996800; }
+    .sms-nav a.active { background: #fff; border-color: #c3c4c7; border-bottom-color: #fff; color: #1d2327; font-weight: 600; margin-bottom: -1px; }
+
+    /* Tarjetas */
+    .sms-card { background: #fff; border: 1px solid #c3c4c7; border-radius: 4px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    .sms-card h3 { margin-top: 0; border-bottom: 1px solid #f0f0f1; padding-bottom: 10px; margin-bottom: 15px; color: #2c3338; }
+
+    /* Formularios */
+    .sms-form-group { margin-bottom: 15px; }
+    .sms-form-group label { display: block; font-weight: 600; margin-bottom: 5px; color: #1d2327; }
+    .sms-form-group input[type="text"], .sms-form-group input[type="password"], .sms-form-group input[type="number"], .sms-form-group textarea, .sms-form-group select { width: 100%; max-width: 500px; padding: 8px; border: 1px solid #8c8f94; border-radius: 4px; }
+    .sms-helper { font-size: 13px; color: #646970; margin-top: 5px; font-style: italic; }
+
+    /* Tablas */
+    .status-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+    .st-abandoned { background: #ffe6e6; color: #d63638; } /* Rojo suave */
+    .st-contacted { background: #fff8e5; color: #996800; } /* Amarillo */
+    .st-recovered { background: #e7f7ed; color: #008a20; } /* Verde */
+    .st-failed    { background: #333; color: #fff; }
+
+    .btn-action { cursor: pointer; font-size: 12px; }
 </style>
 
-<div class="sms-wrap">
+<div class="wrap sms-wrap">
     
     <div class="sms-header">
         <div>
-            <h1>SmsEnLinea Pro Connect</h1>
-            <p style="margin:5px 0 0; color:#646970;">Marketing Conversacional</p>
+            <h1>SmsEnLinea Pro</h1>
+            <p>Conecta tu WhatsApp y recupera ventas automáticamente.</p>
         </div>
-        <div>
-            <span class="badge active" style="font-size:12px;">v<?php echo SMSENLINEA_VERSION; ?></span>
-        </div>
+        <span class="sms-badge">VERSIÓN 2.0 PRO</span>
     </div>
 
     <div class="sms-nav">
-        <a href="?page=smsenlinea-pro&tab=general" class="<?php echo $active_tab == 'general' ? 'active' : ''; ?>">
-            <span class="dashicons dashicons-admin-settings"></span> Configuración
-        </a>
-        <a href="?page=smsenlinea-pro&tab=strategy" class="<?php echo $active_tab == 'strategy' ? 'active' : ''; ?>">
-            <span class="dashicons dashicons-networking"></span> Estrategia
-        </a>
-        <a href="?page=smsenlinea-pro&tab=woocommerce" class="<?php echo $active_tab == 'woocommerce' ? 'active' : ''; ?>">
-            <span class="dashicons dashicons-cart"></span> Notificaciones
-        </a>
-        <a href="?page=smsenlinea-pro&tab=reports" class="<?php echo $active_tab == 'reports' ? 'active' : ''; ?>">
-            <span class="dashicons dashicons-chart-bar"></span> Reportes
-        </a>
+        <a href="?page=smsenlinea-pro&tab=general" class="<?php echo $active_tab == 'general' ? 'active' : ''; ?>">⚙️ General</a>
+        <a href="?page=smsenlinea-pro&tab=strategy" class="<?php echo $active_tab == 'strategy' ? 'active' : ''; ?>">🧠 Estrategia</a>
+        <a href="?page=smsenlinea-pro&tab=wc_settings" class="<?php echo $active_tab == 'wc_settings' ? 'active' : ''; ?>">🛍️ WooCommerce</a>
+        <a href="?page=smsenlinea-pro&tab=carts" class="<?php echo $active_tab == 'carts' ? 'active' : ''; ?>">🛒 Carritos en Vivo</a>
+        <a href="?page=smsenlinea-pro&tab=reports" class="<?php echo $active_tab == 'reports' ? 'active' : ''; ?>">📊 Reportes y Logs</a>
     </div>
 
     <form method="post" action="options.php">
-        
-        <?php if ( $active_tab == 'general' ) : 
-            settings_fields( 'smsenlinea_option_group' );
+        <?php
+        // Renderizamos grupos de opciones según la pestaña activa
+        if ( $active_tab == 'general' ) {
+            settings_fields( 'smsenlinea_settings_group' );
             $opts = get_option( 'smsenlinea_settings' );
-            $secret = isset($opts['webhook_secret']) ? $opts['webhook_secret'] : wp_generate_password( 20, false );
-            $webhook_url = add_query_arg( 'secret', $secret, get_rest_url( null, 'smsenlinea/v1/webhook' ) );
+        } elseif ( $active_tab == 'strategy' ) {
+            settings_fields( 'smsenlinea_settings_group' ); // Usamos el mismo grupo general
+            $opts = get_option( 'smsenlinea_strategy_settings' );
+        } elseif ( $active_tab == 'wc_settings' ) {
+            settings_fields( 'smsenlinea_settings_group' );
+            $opts = get_option( 'smsenlinea_wc_settings' );
+        }
         ?>
-            <div class="sms-card">
-            <h3>Credenciales API</h3>
-            <div class="sms-form-group">
-                <label>API Secret</label>
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                    <input type="password" id="sms_api_secret" name="smsenlinea_settings[api_secret]" value="<?php echo esc_attr( $opts['api_secret'] ); ?>" style="flex-grow: 1;">
-                    <button type="button" id="btn_test_connection" class="button button-secondary">Probar Conexión</button>
-                </div>
-                <p class="sms-helper">Obtenido de Herramientas -> API Keys en SmsEnLinea.</p>
 
-                <div id="connection_status_card" style="margin-top: 15px; display: none;"></div>
-            </div>
-        </div>
+        <?php if ( $active_tab == 'general' ) : ?>
+            <div class="sms-card">
+                <h3>Credenciales API</h3>
+                <div class="sms-form-group">
+                    <label>API Secret</label>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                        <input type="password" id="sms_api_secret" name="smsenlinea_settings[api_secret]" value="<?php echo esc_attr( $opts['api_secret'] ?? '' ); ?>" style="flex-grow: 1;">
+                        <button type="button" id="btn_test_connection" class="button button-secondary">Probar Conexión</button>
+                    </div>
+                    <p class="sms-helper">Obtenido de Herramientas -> API Keys en SmsEnLinea.</p>
+                    <div id="connection_status_card" style="margin-top: 15px; display: none;"></div>
+                </div>
             </div>
 
             <div class="sms-card">
                 <h3>Configuración de Envío</h3>
                 <div class="sms-form-group">
-                    <label>Modo</label>
+                    <label>Modo de Envío</label>
                     <select name="smsenlinea_settings[sending_mode]">
-                        <option value="devices" <?php selected( $opts['sending_mode'], 'devices' ); ?>>Dispositivos Vinculados</option>
-                        <option value="credits" <?php selected( $opts['sending_mode'], 'credits' ); ?>>Créditos API</option>
+                        <option value="devices" <?php selected( $opts['sending_mode'] ?? 'devices', 'devices' ); ?>>Dispositivos Vinculados (Android)</option>
+                        <option value="credits" <?php selected( $opts['sending_mode'] ?? '', 'credits' ); ?>>Gateway / Créditos</option>
                     </select>
                 </div>
                 <div class="sms-form-group">
-                    <label>Device ID</label>
+                    <label>ID de Dispositivo (Device ID)</label>
                     <input type="text" name="smsenlinea_settings[device_id]" value="<?php echo esc_attr( $opts['device_id'] ?? '' ); ?>">
+                    <p class="sms-helper">Solo si usas modo 'Dispositivos'.</p>
                 </div>
                 <div class="sms-form-group">
-                    <label>WhatsApp Account ID</label>
+                    <label>Cuenta de WhatsApp (Unique ID)</label>
                     <input type="text" name="smsenlinea_settings[wa_account_unique]" value="<?php echo esc_attr( $opts['wa_account_unique'] ?? '' ); ?>">
+                    <p class="sms-helper">Requerido para enviar WhatsApps.</p>
                 </div>
             </div>
 
-            <div class="sms-card" style="border-left: 4px solid #72aee6;">
-                <h3>📡 Webhook (Requerido)</h3>
-                <p>Copia esta URL en tu panel de SmsEnLinea:</p>
-                <input type="text" value="<?php echo esc_url( $webhook_url ); ?>" readonly onclick="this.select();" style="width:100%; background:#f9f9f9; padding:10px; border:1px dashed #ccc;">
-                <input type="hidden" name="smsenlinea_settings[webhook_secret]" value="<?php echo esc_attr( $secret ); ?>">
-            </div>
-        <div style="margin-top: 30px;">
-                <h3>📡 Monitor de Tráfico en Vivo (Últimos 50 eventos)</h3>
-                <p class="description">Aquí verás en tiempo real qué mensajes llegan a tu sistema y si son aceptados o rechazados.</p>
-                
-                <div class="sms-card" style="padding: 0; overflow: hidden;">
-                    <table class="widefat striped" style="border: none;">
-                        <thead>
-                            <tr style="background: #f0f0f1;">
-                                <th style="padding: 15px;">Hora</th>
-                                <th style="padding: 15px;">Nivel</th>
-                                <th style="padding: 15px;">Detalle del Evento</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php 
-                            // Recuperamos los logs guardados
-                            $webhook_logs = get_option( 'smsenlinea_webhook_logs', [] );
-                            
-                            if ( empty( $webhook_logs ) ) {
-                                echo '<tr><td colspan="3" style="padding: 20px; text-align: center; color: #666;">⏳ No hay actividad registrada aún. Envía un mensaje a tu WhatsApp para probar.</td></tr>';
-                            } else {
-                                foreach ( $webhook_logs as $log ) {
-                                    $color_style = '';
-                                    $badge = '';
-                                    
-                                    if ( $log['level'] === 'error' ) {
-                                        $color_style = 'color: #d63638; background: #fbeaea;';
-                                        $badge = '❌ ERROR';
-                                    } elseif ( $log['level'] === 'warning' ) {
-                                        $color_style = 'color: #996800;';
-                                        $badge = '⚠️ ALERTA';
-                                    } else {
-                                        $badge = 'ℹ️ INFO';
-                                    }
-
-                                    echo "<tr style='$color_style'>";
-                                    echo "<td style='padding: 10px; white-space: nowrap;'>" . esc_html( $log['time'] ) . "</td>";
-                                    echo "<td style='padding: 10px;'><strong>" . esc_html( $badge ) . "</strong></td>";
-                                    echo "<td style='padding: 10px;'>" . esc_html( $log['msg'] ) . "</td>";
-                                    echo "</tr>";
-                                }
-                            }
-                            ?>
-                        </tbody>
-                    </table>
-                    
-                    <div style="padding: 10px; background: #f9f9f9; border-top: 1px solid #ddd; text-align: right;">
-                        <input type="hidden" name="smsenlinea_clear_logs" value="0"> <button type="submit" name="smsenlinea_action_clear_logs" value="1" class="button button-link-delete" onclick="return confirm('¿Borrar historial?');">Limpiar Historial</button>
-                    </div>
-                </div>
-            </div>
-
-        <?php elseif ( $active_tab == 'strategy' ) : 
-            settings_fields( 'smsenlinea_strategy_group' );
-            $strat = get_option( 'smsenlinea_strategy_settings' );
-        ?>
             <div class="sms-card">
-                <div style="float:right;">
-                    <button type="button" id="trigger-cron-btn" class="button button-small">⚡ Ejecutar Ahora</button>
-                    <span id="cron-result" style="font-size:12px; margin-left:5px;"></span>
+                <h3>Webhook (Recepción de Mensajes)</h3>
+                <div class="sms-form-group">
+                    <label>URL del Webhook</label>
+                    <input type="text" readonly value="<?php echo home_url( '/wp-json/smsenlinea/v1/webhook' ); ?>" style="background: #f0f0f1;">
+                    <p class="sms-helper">Copia esto y pégalo en SmsEnLinea -> Webhooks.</p>
                 </div>
-                <h3>Recuperación de Carritos</h3>
-                <p>Configura cuándo contactar al cliente.</p>
+                <div class="sms-form-group">
+                    <label>Webhook Secret</label>
+                    <?php $secret = $opts['webhook_secret'] ?? wp_generate_password( 20, false ); ?>
+                    <input type="text" name="smsenlinea_settings[webhook_secret]" value="<?php echo esc_attr( $secret ); ?>">
+                    <p class="sms-helper">Este secreto valida que los mensajes vengan realmente de SmsEnLinea.</p>
+                </div>
+            </div>
+
+        <?php elseif ( $active_tab == 'strategy' ) : ?>
+            <div class="sms-card">
+                <h3>Tiempos y Reglas</h3>
+                <div class="sms-form-group">
+                    <label>Esperar antes de contactar (minutos)</label>
+                    <input type="number" name="smsenlinea_settings[abandoned_timeout]" value="<?php echo esc_attr( get_option('smsenlinea_settings')['abandoned_timeout'] ?? 15 ); ?>" min="1">
+                    <p class="sms-helper">Tiempo que debe pasar desde que el cliente abandona hasta que enviamos el mensaje.</p>
+                </div>
+            </div>
+
+            <div class="sms-card">
+                <h3>El Mensaje Rompehielo 🧊</h3>
+                <div class="sms-form-group">
+                    <label>Mensaje Inicial</label>
+                    <textarea name="smsenlinea_strategy_settings[icebreaker_msg]" rows="4" id="msg_icebreaker"><?php echo esc_textarea( $opts['icebreaker_msg'] ?? '' ); ?></textarea>
+                    <div style="margin-top: 5px;">
+                        <button type="button" class="button button-small emoji-btn" data-target="msg_icebreaker">😀 Insertar Emoji</button>
+                    </div>
+                    <p class="sms-helper">Variables: <code>{name}</code>, <code>{site_name}</code>, <code>{total}</code>, <code>{checkout_url}</code></p>
+                </div>
+            </div>
+
+            <div class="sms-card" style="border-left: 4px solid #f0b849;">
+                <h3>🛠️ Zona de Pruebas</h3>
+                <p>Si no quieres esperar 5 minutos, fuerza la ejecución del sistema ahora mismo.</p>
+                <button type="button" id="trigger-cron-btn" class="button button-secondary">⚡ Ejecutar Tareas Programadas Ahora</button>
+                <span id="cron-result" style="margin-left: 10px; font-weight: bold;"></span>
+            </div>
+
+        <?php elseif ( $active_tab == 'wc_settings' ) : ?>
+            <div class="sms-card">
+                <h3>Notificaciones de Estado de Pedido</h3>
+                <p>Envía mensajes automáticos cuando cambia el estado del pedido en WooCommerce.</p>
                 
                 <div class="sms-form-group">
-                    <label>Retraso (Minutos)</label>
-                    <input type="number" name="smsenlinea_strategy_settings[cart_delay]" value="<?php echo esc_attr( $strat['cart_delay'] ?? 60 ); ?>" min="1">
-                </div>
-
-                <div class="sms-form-group">
-                    <label>Mensaje Rompehielos (Paso 1)</label>
-                    <textarea name="smsenlinea_strategy_settings[icebreaker_msg]" id="ice_msg"><?php echo esc_textarea( $strat['icebreaker_msg'] ?? '' ); ?></textarea>
-                    <button type="button" class="emoji-btn" data-target="ice_msg">😊 Emoji</button>
-                </div>
-            </div>
-
-            <div class="sms-card">
-                <h3>Inteligencia Artificial (Palabras Clave)</h3>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
-                    <div class="sms-form-group">
-                        <label>Si responde POSITIVO:</label>
-                        <input type="text" name="smsenlinea_strategy_settings[keywords_positive]" value="<?php echo esc_attr( $strat['keywords_positive'] ?? '' ); ?>">
-                        <p class="sms-helper">Ej: si, claro, ayuda, quiero</p>
-                    </div>
-                    <div class="sms-form-group">
-                        <label>Si responde NEGATIVO:</label>
-                        <input type="text" name="smsenlinea_strategy_settings[keywords_negative]" value="<?php echo esc_attr( $strat['keywords_negative'] ?? '' ); ?>">
-                        <p class="sms-helper">Ej: no, baja, stop, gracias</p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sms-card">
-                <h3>Flujo de Respuesta</h3>
-                <div class="sms-form-group">
-                    <label>✅ Mensaje de Recuperación (Link)</label>
-                    <textarea name="smsenlinea_strategy_settings[msg_recovery]" id="rec_msg"><?php echo esc_textarea( $strat['msg_recovery'] ?? '' ); ?></textarea>
-                    <button type="button" class="emoji-btn" data-target="rec_msg">😊 Emoji</button>
+                    <label>Pedido Completado</label>
+                    <textarea name="smsenlinea_wc_settings[msg_completed]" rows="3"><?php echo esc_textarea( $opts['msg_completed'] ?? '' ); ?></textarea>
                 </div>
                 <div class="sms-form-group">
-                    <label>❌ Mensaje de Despedida</label>
-                    <textarea name="smsenlinea_strategy_settings[msg_close]" id="close_msg"><?php echo esc_textarea( $strat['msg_close'] ?? '' ); ?></textarea>
-                    <button type="button" class="emoji-btn" data-target="close_msg">😊 Emoji</button>
+                    <label>Pedido Fallido (Recuperación Inmediata)</label>
+                    <textarea name="smsenlinea_wc_settings[msg_failed]" rows="3"><?php echo esc_textarea( $opts['msg_failed'] ?? '' ); ?></textarea>
                 </div>
             </div>
 
-        <?php elseif ( $active_tab == 'woocommerce' ) : 
-            settings_fields( 'smsenlinea_wc_group' );
-            $wc = get_option( 'smsenlinea_wc_settings' );
-        ?>
+        <?php elseif ( $active_tab == 'carts' ) : ?>
             <div class="sms-card">
-                <h3>Variables Disponibles</h3>
-                <div style="background:#f6f7f7; padding:15px; border-radius:4px; font-size:13px; color:#2271b1;">
-                    <code>{customer_name}</code>, <code>{order_id}</code>, <code>{order_total}</code>, <code>{checkout_url}</code>, <code>{site_name}</code>
-                </div>
-            </div>
-
-            <div class="sms-card">
-                <h3>Estados del Pedido</h3>
-                <?php
-                $statuses = ['pending'=>'Pendiente','processing'=>'Procesando','completed'=>'Completado','failed'=>'Fallido'];
-                foreach ( $statuses as $key => $label ) : ?>
-                    <div class="sms-form-group">
-                        <label><?php echo esc_html( $label ); ?></label>
-                        <textarea name="smsenlinea_wc_settings[msg_<?php echo $key; ?>]" id="wc_<?php echo $key; ?>"><?php echo esc_textarea( $wc["msg_$key"] ?? '' ); ?></textarea>
-                        <button type="button" class="emoji-btn" data-target="wc_<?php echo $key; ?>">😊 Emoji</button>
+                <h3>🛒 Gestión de Carritos Abandonados</h3>
+                <p>Aquí aparecen en tiempo real los clientes que escriben sus datos en el Checkout pero no compran.</p>
+                
+                <?php if ( empty( $carts_list ) ) : ?>
+                    <div style="padding: 20px; text-align: center; color: #666; background: #f9f9f9; border-radius: 4px;">
+                        <p>📭 No hay carritos registrados todavía. Ve a tu tienda e intenta hacer una compra sin finalizarla para probar.</p>
                     </div>
-                <?php endforeach; ?>
-            </div>
-
-        <?php elseif ( $active_tab == 'reports' ) : ?>
-            
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <span class="stat-number"><?php echo intval( $stats['total'] ); ?></span>
-                    <span class="stat-label">Conversaciones Iniciadas</span>
-                </div>
-                <div class="stat-box" style="border-bottom: 3px solid #107e3e;">
-                    <span class="stat-number" style="color:#107e3e;"><?php echo intval( $stats['recovered'] ); ?></span>
-                    <span class="stat-label">Recuperados</span>
-                </div>
-                <div class="stat-box" style="border-bottom: 3px solid #d63638;">
-                    <span class="stat-number" style="color:#d63638;"><?php echo intval( $stats['lost'] ); ?></span>
-                    <span class="stat-label">Rechazados / Perdidos</span>
-                </div>
-            </div>
-
-            <div class="sms-card" style="padding:0; border:none; box-shadow:none;">
-                <h3>Historial Reciente</h3>
-                <?php if ( empty( $logs ) ) : ?>
-                    <div style="padding:20px; text-align:center; color:#888;">No hay actividad registrada aún.</div>
                 <?php else : ?>
-                    <table class="logs-table">
+                    <table class="widefat striped">
                         <thead>
                             <tr>
                                 <th>Fecha</th>
-                                <th>Teléfono</th>
                                 <th>Cliente</th>
+                                <th>Teléfono</th>
                                 <th>Total</th>
                                 <th>Estado</th>
+                                <th>Acciones</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ( $logs as $log ) : 
-                                $ctx = json_decode( $log->context_data, true );
-                                $status_class = $log->status == 'recovered' ? 'recovered' : ($log->status == 'rejected' ? 'rejected' : 'active');
-                                $status_label = $log->status == 'recovered' ? 'Recuperado' : ($log->status == 'rejected' ? 'Rechazado' : 'Esperando');
-                            ?>
-                            <tr>
-                                <td><?php echo esc_html( $log->last_interaction ); ?></td>
-                                <td><?php echo esc_html( $log->phone_number ); ?></td>
-                                <td><?php echo esc_html( $ctx['customer_name'] ?? '-' ); ?></td>
-                                <td><?php echo esc_html( $ctx['total'] ?? '-' ); ?></td>
-                                <td><span class="badge <?php echo $status_class; ?>"><?php echo $status_label; ?></span></td>
-                            </tr>
+                            <?php foreach ( $carts_list as $cart ) : ?>
+                                <tr>
+                                    <td><?php echo date_i18n( 'd M H:i', strtotime( $cart->created_at ) ); ?></td>
+                                    <td>
+                                        <strong><?php echo esc_html( $cart->customer_name ); ?></strong><br>
+                                        <small><?php echo esc_html( $cart->email ); ?></small>
+                                    </td>
+                                    <td><?php echo esc_html( $cart->phone ); ?></td>
+                                    <td><?php echo esc_html( $cart->cart_total . ' ' . $cart->currency ); ?></td>
+                                    <td>
+                                        <?php 
+                                        $status_label = $cart->status;
+                                        $css_class = 'st-abandoned';
+                                        
+                                        if ( $cart->status == 'contacted' ) { $status_label = 'Mensaje Enviado'; $css_class = 'st-contacted'; }
+                                        elseif ( $cart->status == 'recovered' ) { $status_label = '✅ Recuperado'; $css_class = 'st-recovered'; }
+                                        elseif ( $cart->status == 'failed_send' ) { $status_label = '❌ Error Envío'; $css_class = 'st-failed'; }
+                                        elseif ( $cart->status == 'abandoned' ) { $status_label = '⏳ Esperando'; $css_class = 'st-abandoned'; }
+                                        ?>
+                                        <span class="status-badge <?php echo $css_class; ?>"><?php echo esc_html( $status_label ); ?></span>
+                                    </td>
+                                    <td>
+                                        <?php if ( $cart->status !== 'recovered' ) : ?>
+                                            <button type="button" class="button button-small button-primary btn-manual-recovery" data-id="<?php echo $cart->id; ?>">
+                                                📩 Enviar Ahora
+                                            </button>
+                                        <?php else: ?>
+                                            <span style="color: #aaa;">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
                 <?php endif; ?>
             </div>
 
+        <?php elseif ( $active_tab == 'reports' ) : ?>
+            
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px;">
+                <div class="sms-card" style="text-align: center; border-left: 4px solid #2271b1;">
+                    <h2 style="font-size: 30px; margin: 10px 0;"><?php echo $stats['total']; ?></h2>
+                    <p style="margin: 0; color: #666;">Carritos Detectados</p>
+                </div>
+                <div class="sms-card" style="text-align: center; border-left: 4px solid #46b450;">
+                    <h2 style="font-size: 30px; margin: 10px 0;"><?php echo $stats['recovered']; ?></h2>
+                    <p style="margin: 0; color: #666;">Ventas Recuperadas</p>
+                </div>
+                <div class="sms-card" style="text-align: center; border-left: 4px solid #d63638;">
+                    <h2 style="font-size: 30px; margin: 10px 0;"><?php echo $stats['lost']; ?></h2>
+                    <p style="margin: 0; color: #666;">No Convertidos</p>
+                </div>
+            </div>
+
+            <div class="sms-card">
+                <h3>📡 Monitor de Tráfico (Webhooks)</h3>
+                <p class="description">Registro técnico de mensajes entrantes y respuestas.</p>
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>Hora</th>
+                            <th>Nivel</th>
+                            <th>Mensaje</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if ( empty( $logs ) ) : ?>
+                            <tr><td colspan="3">Sin actividad reciente.</td></tr>
+                        <?php else : ?>
+                            <?php foreach ( $logs as $log ) : 
+                                $color = ($log['level']=='error') ? 'color:red;' : ''; 
+                            ?>
+                                <tr style="<?php echo $color; ?>">
+                                    <td><?php echo esc_html( $log['time'] ); ?></td>
+                                    <td><strong><?php echo esc_html( strtoupper($log['level']) ); ?></strong></td>
+                                    <td><?php echo esc_html( $log['msg'] ); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+                <form method="post" action="" style="margin-top: 10px; text-align: right;">
+                    <input type="hidden" name="smsenlinea_action_clear_logs" value="1">
+                    <button type="submit" class="button button-link-delete">Limpiar Logs</button>
+                </form>
+            </div>
+
         <?php endif; ?>
 
-        <?php if ( $active_tab != 'reports' ) submit_button( 'Guardar Configuración', 'primary sms-btn-primary' ); ?>
+        <?php if ( $active_tab != 'carts' && $active_tab != 'reports' ) submit_button( 'Guardar Configuración', 'primary sms-btn-primary' ); ?>
     </form>
 </div>
 
-<script>
+<script type="text/javascript">
 jQuery(document).ready(function($) {
-    // Emojis simple
+    
+    // 1. Emoji Picker Simple
     $('.emoji-btn').click(function(e) {
         var t = $(this).data('target');
         var i = document.getElementById(t);
-        var em = prompt("Inserta Emoji:", "😊");
-        if(em) { i.setRangeText(em,i.selectionStart,i.selectionEnd,'end'); i.focus(); }
+        var em = prompt("Copia y pega tu emoji aquí:", "😊");
+        if(em) { 
+            // Insertar en la posición del cursor
+            if (i.selectionStart || i.selectionStart == '0') {
+                var startPos = i.selectionStart;
+                var endPos = i.selectionEnd;
+                i.value = i.value.substring(0, startPos) + em + i.value.substring(endPos, i.value.length);
+            } else {
+                i.value += em;
+            }
+        }
     });
 
-    // [Nuevo V2] Test Conexión Avanzado y Estado del Plan
+    // 2. Test Conexión API
     $('#btn_test_connection').on('click', function(e) {
         e.preventDefault();
         var secret = $('#sms_api_secret').val();
         var $btn = $(this);
         var $card = $('#connection_status_card');
 
-        if(!secret) {
-            alert('Por favor ingresa un API Secret primero.');
-            return;
-        }
+        if(!secret) { alert('Ingresa un API Secret.'); return; }
 
         $btn.prop('disabled', true).text('Verificando...');
         $card.hide().html('');
 
         $.post(ajaxurl, {
-            action: 'smsenlinea_check_connection', // Debe coincidir con el hook en class-admin-settings.php
+            action: 'smsenlinea_check_connection',
             secret: secret
         }, function(response) {
             $btn.prop('disabled', false).text('Probar Conexión');
-
+            
             if (response.success) {
                 var plan = response.data.data;
-                // Construir HTML de la tarjeta de Plan
-                var html = '<div style="background:#f0f6fc; border-left: 4px solid #46b450; padding: 15px; border-radius: 4px;">';
-                html += '<h4 style="margin: 0 0 10px 0; color: #1d2327;">✅ Conexión Exitosa: Plan ' + plan.name + '</h4>';
-                html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; font-size: 13px;">';
-
-                // Datos de WhatsApp
-                if(plan.usage.wa_send) {
-                    html += '<div><strong>WhatsApp:</strong> ' + plan.usage.wa_send.used + ' envíos</div>';
+                var html = '<div style="background:#f0f6fc; border-left: 4px solid #46b450; padding: 15px;">';
+                html += '<h4>✅ Conectado: Plan ' + (plan.name || 'Activo') + '</h4>';
+                // Detalles rápidos
+                if(plan.usage && plan.usage.wa_send) {
+                     html += '<small>WhatsApp Enviados: ' + plan.usage.wa_send.used + '</small>';
                 }
-                // Datos de SMS
-                if(plan.usage.sms_send) {
-                    var limit = plan.usage.sms_send.limit > 0 ? '/' + plan.usage.sms_send.limit : '';
-                    html += '<div><strong>SMS:</strong> ' + plan.usage.sms_send.used + limit + '</div>';
-                }
-                // Datos de Dispositivos
-                if(plan.usage.devices) {
-                    html += '<div><strong>Dispositivos:</strong> ' + plan.usage.devices.used + '/' + plan.usage.devices.limit + '</div>';
-                }
-
                 html += '</div>';
-                html += '<div style="margin-top: 12px;"><a href="https://smsenlinea.com/panel/billing" target="_blank" class="button button-small">Gestionar Plan / Recargar</a></div>';
-                html += '</div>';
-
                 $card.html(html).fadeIn();
             } else {
-                var msg = response.data || 'Error desconocido';
-                $card.html('<div style="background:#fbeaea; border-left: 4px solid #d63638; padding: 10px; color: #d63638;">❌ Error: ' + msg + '</div>').fadeIn();
+                $card.html('<div style="color:red; padding:10px;">❌ Error: ' + (response.data || 'Desconocido') + '</div>').fadeIn();
             }
-        }).fail(function() {
-            $btn.prop('disabled', false).text('Probar Conexión');
-            $card.html('<div style="padding: 10px; color: red;">Error de red o servidor.</div>').fadeIn();
         });
     });
 
-    // Trigger Manual Cron
+    // 3. Trigger Cron Manual (Pruebas)
     $('#trigger-cron-btn').click(function() {
         var b=$(this), r=$('#cron-result');
         b.prop('disabled',true).text('Ejecutando...');
-        $.post(ajaxurl,{action:'smsenlinea_trigger_cron'},function(d){
-            b.prop('disabled',false).text('⚡ Ejecutar Ahora');
-            if(d.success) alert('✅ ' + d.data);
-            else alert('❌ Error');
+        $.post(ajaxurl, { action:'smsenlinea_trigger_cron' }, function(d) {
+            b.prop('disabled',false).text('Ejecutar Ahora');
+            r.text(d.success ? '✅ ' + d.data.message : '❌ Error');
         });
     });
+
+    // 4. [NUEVO] Envío Manual Individual desde la Tabla de Carritos
+    $('.btn-manual-recovery').click(function(e) {
+        e.preventDefault();
+        var $btn = $(this);
+        var cartId = $btn.data('id');
+        
+        if(!confirm('¿Seguro que quieres enviar el mensaje de recuperación a este cliente ahora mismo?')) return;
+        
+        $btn.prop('disabled', true).text('Enviando...');
+        
+        $.post(ajaxurl, {
+            action: 'smsenlinea_manual_recovery',
+            id: cartId,
+            nonce: '<?php echo wp_create_nonce("smsenlinea_manual_action"); ?>' // Seguridad
+        }, function(response) {
+            if(response.success) {
+                alert('¡Mensaje enviado con éxito!');
+                location.reload(); // Recargar para ver el cambio de estado
+            } else {
+                alert('Error: ' + response.data);
+                $btn.prop('disabled', false).text('Reintentar');
+            }
+        });
+    });
+
 });
 </script>
-
-
