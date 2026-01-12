@@ -1,7 +1,13 @@
 <?php
 namespace SmsEnLinea\ProConnect;
 
-if ( ! defined( 'ABSPATH' ) ) { exit; }
+/**
+ * Scheduler Class
+ * Se encarga de las tareas programadas (Cron Jobs) para recuperar carritos.
+ */
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
 
 class Scheduler {
 
@@ -15,88 +21,97 @@ class Scheduler {
     }
 
     private function __construct() {
-        add_action( 'smsenlinea_recover_carts_event', [ $this, 'check_abandoned_carts' ] );
+        // 1. Registrar intervalos personalizados (5 minutos)
+        add_filter( 'cron_schedules', [ $this, 'add_custom_intervals' ] );
+
+        // 2. Vincular el evento del Cron a nuestra función maestra
+        add_action( 'smsenlinea_cron_recovery_event', [ $this, 'process_abandoned_carts' ] );
+
+        // 3. Trigger Manual (AJAX) para pruebas desde el admin
+        add_action( 'wp_ajax_smsenlinea_trigger_cron', [ $this, 'ajax_manual_trigger' ] );
     }
 
-    public function check_abandoned_carts() {
-        $strategy = get_option( 'smsenlinea_strategy_settings' );
-        $delay_minutes = isset( $strategy['cart_delay'] ) ? intval( $strategy['cart_delay'] ) : 60;
-        if ( $delay_minutes < 1 ) $delay_minutes = 60;
-
-        // Buscar pedidos creados entre hace 24h y hace X minutos
-        $time_threshold = strtotime( "-{$delay_minutes} minutes" );
-        $safety_threshold = strtotime( "-24 hours" );
-
-        $args = [
-            'status' => [ 'pending', 'failed' ], // Incluimos fallidos también
-            'limit'  => 10,
-            'date_created' => '>' . $safety_threshold, 
-            'type' => 'shop_order',
+    /**
+     * Agrega intervalo de 5 minutos a WordPress
+     */
+    public function add_custom_intervals( $schedules ) {
+        $schedules['sms_five_minutes'] = [
+            'interval' => 300, // 300 segundos = 5 minutos
+            'display'  => __( 'Cada 5 Minutos (SmsEnLinea)', 'smsenlinea-pro' )
         ];
-
-        $orders = wc_get_orders( $args );
-
-        foreach ( $orders as $order ) {
-            $created_timestamp = $order->get_date_created()->getTimestamp();
-            
-            // Si es muy reciente según la configuración, esperar
-            if ( $created_timestamp > $time_threshold ) {
-                continue;
-            }
-
-            $this->process_single_cart( $order, $strategy );
-        }
+        return $schedules;
     }
 
-    // Hacemos este método público para poder llamarlo manualmente desde el botón
-    public function process_single_cart( $order, $strategy = null ) {
-        if ( ! $strategy ) {
-            $strategy = get_option( 'smsenlinea_strategy_settings' );
-        }
+    /**
+     * FUNCIÓN MAESTRA: Busca y procesa carritos abandonados
+     */
+    public function process_abandoned_carts() {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'smsenlinea_sessions';
 
-        $phone = $order->get_billing_phone();
-        if ( empty( $phone ) ) return false;
-
-        $flow_engine = Flow_Engine::get_instance();
+        // 1. Obtener configuración de tiempo de espera (Default: 15 min)
+        $options = get_option( 'smsenlinea_settings' );
+        $delay_minutes = isset( $options['abandoned_timeout'] ) ? intval( $options['abandoned_timeout'] ) : 15;
         
-        // --- RECOPILACIÓN EXTENDIDA DE DATOS ---
-        $items_list = [];
-        foreach ( $order->get_items() as $item ) {
-            $items_list[] = $item->get_quantity() . 'x ' . $item->get_name();
+        if ( $delay_minutes < 1 ) $delay_minutes = 1;
+
+        // 2. Calcular la hora de corte (Ej: Ahora - 15 minutos)
+        // Buscamos carritos que se modificaron ANTES de esta hora.
+        $cut_off_time = date( 'Y-m-d H:i:s', strtotime( "-$delay_minutes minutes" ) );
+
+        // 3. Consulta a la Base de Datos
+        // Buscamos: Estado 'abandoned' AND Última interacción < Tiempo de corte
+        // Límite: 10 por ejecución para evitar timeouts en el servidor.
+        $sessions = $wpdb->get_results( $wpdb->prepare(
+            "SELECT * FROM $table_name 
+             WHERE status = 'abandoned' 
+             AND last_interaction <= %s 
+             LIMIT 10",
+            $cut_off_time
+        ) );
+
+        if ( empty( $sessions ) ) {
+            return "Sin carritos pendientes.";
         }
-        $items_string = implode( ', ', $items_list );
 
-        $context = [
-            'order_id'          => $order->get_id(),
-            'customer_name'     => $order->get_billing_first_name(),
-            'customer_lastname' => $order->get_billing_last_name(),
-            'checkout_url'      => $order->get_checkout_payment_url(),
-            'total'             => $order->get_formatted_order_total(),
-            'billing_address'   => $order->get_billing_address_1() . ' ' . $order->get_billing_city(),
-            'order_items'       => $items_string,
-            'order_date'        => $order->get_date_created()->date_i18n( get_option( 'date_format' ) ),
-        ];
-        // ---------------------------------------
+        // 4. Procesar cada sesión encontrada
+        $engine = Flow_Engine::get_instance();
+        $count = 0;
 
-        // Intentar iniciar flujo
-        $session_id = $flow_engine->start_flow( $phone, 'abandoned_cart', $context );
-
-        if ( $session_id ) {
-            $api = Api_Handler::get_instance();
+        foreach ( $sessions as $session ) {
+            // Delegamos la lógica de envío y actualización al Motor de Flujos
+            // Esto actualiza el estado a 'processing' o 'recovered_step_1'
+            $result = $engine->run_recovery_sequence( $session );
             
-            // Reemplazo básico para el rompehielos (El resto se hace en Flow_Engine)
-            $message_tpl = $strategy['icebreaker_msg'] ?? 'Hola {customer_name}, ¿necesitas ayuda con tu pedido?';
-            
-            // Usamos el motor para reemplazar variables incluso en el rompehielos
-            $message_final = $flow_engine->replace_variables_public( $message_tpl, $context );
-
-            $sent = $api->send_notification( $phone, $message_final, 'whatsapp' );
-            
-            if ( $sent ) {
-                $order->add_order_note( '[SmsEnLinea] 🧊 Mensaje rompehielos enviado manualmente o por Cron.' );
-                return true;
+            if ( $result ) {
+                $count++;
             }
         }
-        return false;
+
+        return "Procesados $count carritos abandonados.";
+    }
+
+    /**
+     * AJAX: Permite al admin ejecutar el Cron manualmente
+     */
+    public function ajax_manual_trigger() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Permisos insuficientes' );
+        }
+
+        // Ejecutar lógica inmediata
+        $result_msg = $this->process_abandoned_carts();
+
+        wp_send_json_success( [ 'message' => $result_msg ] );
+    }
+
+    /**
+     * Helper para asegurar que el Cron esté programado (Autocuración)
+     * Se puede llamar desde el Activator o init.
+     */
+    public static function ensure_cron_is_scheduled() {
+        if ( ! wp_next_scheduled( 'smsenlinea_cron_recovery_event' ) ) {
+            wp_schedule_event( time(), 'sms_five_minutes', 'smsenlinea_cron_recovery_event' );
+        }
     }
 }
